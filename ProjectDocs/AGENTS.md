@@ -12,7 +12,7 @@
 - Browser automation uses `playwright-core` + `@sparticuz/chromium` only — never full Playwright-bundled Chromium in a deployed function (breaks the 250MB bundle limit).
 - Every Supabase table touching personal data, credentials, resumes, or Q&A history must have RLS enabled before it's used by any API route.
 - Never persist Handshake or email passwords in plaintext. OTP flow uses Gmail readonly OAuth, not stored credentials, wherever the design calls for it.
-- Telegram bot token is a single app-level secret (env var) — never collected from or stored per-user. Per-user linkage is `chat_id` only, captured via the bot's "start" deep link.
+- Telegram bot token and Google OAuth Client ID/secret are app-level secrets set once by the developer (BotFather / Google Cloud Console — manual, not automatable) and stored as Vercel env vars. Never collected from, or exposed to, end users. Per-user linkage is `chat_id` (Telegram) and a refresh token obtained via standard OAuth consent redirect (Gmail) — never raw credentials.
 - Gmail refresh tokens (`gmail_oauth_tokens.refresh_token`) are encrypted at rest and never returned to the client, in an API response, or in logs.
 - Resume upload: always "Upload new" + the Supabase-stored file. Never select an existing document from a Handshake dropdown.
 - Enforce the 300-actions/day bot rate limit via `bot_runs.actions_count` — halt and log, don't silently retry past it.

@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "dotenv": "^17.4.2"
+  },
+  "scripts": {
+    "test-rls": "1test.js"
+  },
+  "type": "module"
+}
