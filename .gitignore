@@ -14,16 +14,18 @@
 node_modules/
 **/node_modules/
 
-# Expo & Next / Vercel
+# Vercel
+.vercel/
+.vercel
+**/.vercel/
+**/.vercel
+
+# Expo & Bundler caches
 .expo/
 **/.expo/
-.vercel/
 .metro-cache/
 
 # OS & Logs
 .DS_Store
 Thumbs.db
 *.log
-.env
-.expo/
-.env.local
