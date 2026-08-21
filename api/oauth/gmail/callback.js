@@ -13,11 +13,6 @@
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
-import {
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
-  GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET,
-  ENCRYPTION_KEY,
-} from '../../../env.js';
 
 function callbackUrl() {
   const base = process.env.VERCEL_URL
@@ -26,12 +21,12 @@ function callbackUrl() {
   return `${base}/api/oauth/gmail/callback`;
 }
 
-function encryptToken(plaintext) {
-  const key  = Buffer.from(ENCRYPTION_KEY, 'hex');
-  const iv   = crypto.randomBytes(12);
+function encryptToken(plaintext, encryptionKeyHex) {
+  const key = Buffer.from(encryptionKeyHex, 'hex');
+  const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const authTag   = cipher.getAuthTag();
+  const authTag = cipher.getAuthTag();
   return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
@@ -67,14 +62,24 @@ export default async function handler(req, res) {
   if (!code || !userId) {
     return res.status(400).send(errorHtml('Missing required parameters.'));
   }
-  if (!ENCRYPTION_KEY) {
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  const googleClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const googleClientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!encryptionKey) {
     console.error('[gmail/callback] ENCRYPTION_KEY not set');
+    return res.status(500).send(errorHtml('Server misconfiguration.'));
+  }
+  if (!googleClientId || !googleClientSecret || !supabaseUrl || !supabaseServiceRoleKey) {
+    console.error('[gmail/callback] Missing required environment variables');
     return res.status(500).send(errorHtml('Server misconfiguration.'));
   }
 
   const oauth2Client = new google.auth.OAuth2(
-    GOOGLE_OAUTH_CLIENT_ID,
-    GOOGLE_OAUTH_CLIENT_SECRET,
+    googleClientId,
+    googleClientSecret,
     callbackUrl(),
   );
 
@@ -93,9 +98,9 @@ export default async function handler(req, res) {
     ));
   }
 
-  const encryptedRefreshToken = encryptToken(tokens.refresh_token);
+  const encryptedRefreshToken = encryptToken(tokens.refresh_token, encryptionKey);
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
   const { error: upsertError } = await supabase
     .from('gmail_oauth_tokens')
     .upsert(

@@ -14,10 +14,6 @@
 
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
-import {
-  SUPABASE_URL, SUPABASE_ANON_KEY,
-  GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET,
-} from '../../../env.js';
 
 function callbackUrl() {
   const base = process.env.VERCEL_URL
@@ -44,7 +40,17 @@ export default async function handler(req, res) {
 
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  const googleClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const googleClientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('[gmail/start] Missing SUPABASE_URL or SUPABASE_ANON_KEY');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -65,9 +71,14 @@ export default async function handler(req, res) {
     });
   }
 
+  if (!googleClientId || !googleClientSecret) {
+    console.error('[gmail/start] Missing GOOGLE_OAUTH_CLIENT_ID or GOOGLE_OAUTH_CLIENT_SECRET');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
   const oauth2Client = new google.auth.OAuth2(
-    GOOGLE_OAUTH_CLIENT_ID,
-    GOOGLE_OAUTH_CLIENT_SECRET,
+    googleClientId,
+    googleClientSecret,
     callbackUrl(),
   );
 

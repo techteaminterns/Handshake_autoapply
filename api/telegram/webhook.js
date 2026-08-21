@@ -18,13 +18,16 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } from '../../env.js';
-
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
 async function sendMessage(chatId, text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    console.error('[telegram/webhook] TELEGRAM_BOT_TOKEN is not set');
+    return;
+  }
+  const telegramApi = `https://api.telegram.org/bot${token}`;
   try {
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
+    await fetch(`${telegramApi}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text }),
@@ -62,7 +65,15 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    console.error('[telegram/webhook] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+    return res.status(500).end();
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
   const { data: profile, error: fetchError } = await supabase
     .from('profiles')

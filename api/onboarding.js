@@ -21,7 +21,6 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../env.js';
 
 // Fields that must be present and non-empty in the request body
 const REQUIRED_FIELDS = [
@@ -85,8 +84,16 @@ export default async function handler(req, res) {
   }
   const token = authHeader.slice(7);
 
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('[onboarding] Missing SUPABASE_URL or SUPABASE_ANON_KEY');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
   // anon key + user JWT → RLS scopes all DB operations to auth.uid()
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
 
