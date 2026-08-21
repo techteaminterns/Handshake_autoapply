@@ -2,7 +2,7 @@
 
 Browser-automation bot that applies to Handshake jobs on a student's behalf, driven by a one-time onboarding form and orchestrated as durable Vercel Workflow steps.
 
-> **Status:** Phase 1 (Slice A2 in progress) — Backend API routes and React Native Expo frontend implementation completed. Remaining work in Phase A2 is to test and finish.
+> **Status:** Phase 1 (Slice A1 & A2 completed) — Supabase schema, RLS policies, serverless API routes (`/api/`), Telegram bot linking with Realtime sync, Google OAuth for Gmail, and React Native (Expo) onboarding UI implemented and verified.
 
 ---
 
@@ -22,7 +22,7 @@ Browser-automation bot that applies to Handshake jobs on a student's behalf, dri
 | Layer | Tool |
 |---|---|
 | Frontend | React Native (Expo) |
-| Backend / DB / Auth | Supabase (Postgres, Storage, RLS) |
+| Backend / DB / Auth | Supabase (Postgres, Storage, RLS, Realtime) |
 | API + orchestration | Vercel Functions + Vercel Workflows |
 | Browser automation | `playwright-core` + `@sparticuz/chromium` |
 | OTP read | Gmail API (readonly OAuth scope) |
@@ -70,17 +70,24 @@ All six tables defined in `05-backend-schema.md`, applied in a single migration:
 
 ### 2. Backend API routes (`api/`)
 
+Vercel Serverless Functions reading directly from `process.env` (free of Expo or bundler dependencies):
+
 - [`api/onboarding.js`](./api/onboarding.js): Accepts authenticated onboarding form payload, validates `.edu` student emails, enforces `<1MB` PDF resume constraint, uploads to Supabase Storage, upserts to `profiles`, records in `resumes`, and returns `{ profile_id, resume_url }`.
-- [`api/telegram/webhook.js`](./api/telegram/webhook.js): Handles `/start <user_id>` deep links from Telegram and links `telegram_chat_id` to the student's profile.
+- [`api/telegram/webhook.js`](./api/telegram/webhook.js): Handles `/start <userId>` deep link payloads from Telegram Bot API, extracting the user ID parameter and upserting `telegram_chat_id` on the student's profile via service role.
 - [`api/oauth/gmail/start.js`](./api/oauth/gmail/start.js): Initiates Google OAuth consent with `gmail.readonly` scope for users with existing Handshake accounts.
 - [`api/oauth/gmail/callback.js`](./api/oauth/gmail/callback.js): Exchanges Google auth code for tokens, encrypts `refresh_token` using AES-256-GCM, and upserts to `gmail_oauth_tokens` via service role.
 
 ### 3. Frontend React Native app (`src/frontend/`)
 
 - Built as a self-contained sub-project with its own `package.json` and Expo dependencies.
-- [`src/frontend/config.js`](./src/frontend/config.js) & [`src/frontend/utils/supabase.js`](./src/frontend/utils/supabase.js): Dynamically imports all endpoints and keys from root [`env.js`](./env.js) (no hardcoded secrets).
+- [`src/frontend/config.js`](./src/frontend/config.js) & [`src/frontend/utils/supabase.js`](./src/frontend/utils/supabase.js): Dynamically resolves API endpoints and Supabase configuration.
 - [`src/frontend/screens/AuthScreen.js`](./src/frontend/screens/AuthScreen.js): Email & password authentication view for Supabase session management.
-- [`src/frontend/screens/OnboardingScreen.js`](./src/frontend/screens/OnboardingScreen.js): Full 20-field onboarding form with client-side PDF picker, direct upload to Supabase Storage, live Telegram linking polling, conditional Gmail OAuth trigger, and a read-only recap state with an "Edit Profile" toggle.
+- [`src/frontend/screens/OnboardingScreen.js`](./src/frontend/screens/OnboardingScreen.js):
+  - Full 20-field onboarding form with client-side PDF picker and direct upload to Supabase Storage.
+  - Isolated submit error handling (`submitError` state) preventing premature error messages on mount.
+  - Deep linking to Telegram with current `userId` parameter (`https://t.me/<bot>?start=<userId>`).
+  - Supabase Realtime subscription on `public:profiles` (`id=eq.${userId}`) + interval polling to instantly reflect "Telegram linked ✓" status when `/start` is received.
+  - Conditional Gmail OAuth trigger and read-only recap state with an "Edit Profile" toggle.
 
 ### 4. Agent rules (`.agents/rules/`)
 
@@ -97,7 +104,7 @@ Four scoped rule files govern each area of the codebase:
 
 ## Environment variables
 
-All environment variables are loaded through [`env.js`](./env.js) from `.env.development.local`:
+All environment variables are loaded from `.env.development.local` (or Vercel project settings):
 
 | Variable | Used by | Notes |
 |---|---|---|
@@ -125,9 +132,9 @@ All environment variables are loaded through [`env.js`](./env.js) from `.env.dev
 
 ---
 
-## Remaining work in Phase A2
+## Next Steps (Phase 2)
 
-- End-to-end testing of the onboarding submission flow (`/api/onboarding`).
-- Smoke testing Telegram webhook (`/api/telegram/webhook`) and Gmail OAuth callback (`/api/oauth/gmail/*`).
-- Verify post-submit recap and edit-unlock flow in the React Native UI.
-- Phase 2: `handshakeBotWorkflow` skeleton, `createAccount` step, and `otpLogin` step.
+- `handshakeBotWorkflow` orchestration setup with Vercel Workflows (`'use workflow'` / `'use step'`).
+- Implementation of `createAccount` flow (new Handshake user creation).
+- Implementation of `otpLogin` flow (existing Handshake user login via Gmail readonly OTP extraction).
+- Step checkpoint verification using `bot/src/fixtures/profile.js`.
