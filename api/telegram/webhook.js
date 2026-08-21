@@ -1,0 +1,99 @@
+/**
+ * POST /api/telegram/webhook
+ *
+ * Receives Telegram Bot API Update objects.
+ *
+ * Phase 1 handles one event:
+ *   /start <supabase_user_id>
+ *     — sent when the user taps the "Link Telegram" deep link in the app.
+ *     — sets profiles.telegram_chat_id for the matched profile.
+ *     — if no profile exists yet (form not submitted), sends a friendly prompt.
+ *
+ * Auth   : Telegram sends this from its own servers. No user JWT. Uses the
+ *          service-role Supabase client scoped narrowly to the single
+ *          profile_id extracted from the /start parameter.
+ * Return : Always 200 — Telegram retries on any other status.
+ *
+ * Phase: Phase 1 — Telegram link-capture (06-implementation.md §5)
+ */
+
+import { createClient } from '@supabase/supabase-js';
+import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN } from '../../env.js';
+
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+
+async function sendMessage(chatId, text) {
+  try {
+    await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch (err) {
+    console.error('[telegram/webhook] sendMessage error:', err.message);
+  }
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') return res.status(405).end();
+
+  const update  = req.body;
+  const message = update?.message;
+  if (!message) return res.status(200).end();
+
+  const chatId = message.chat?.id;
+  const text   = (message.text ?? '').trim();
+
+  if (!text.startsWith('/start')) return res.status(200).end();
+
+  const parts  = text.split(' ');
+  const userId = parts[1]?.trim();
+
+  if (!userId) {
+    await sendMessage(chatId, 'Welcome! To link your Telegram account, tap "Link Telegram" inside the OneClickHandshake app.');
+    return res.status(200).end();
+  }
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  const { data: profile, error: fetchError } = await supabase
+    .from('profiles')
+    .select('id, telegram_chat_id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (fetchError) {
+    console.error('[telegram/webhook] profile fetch error:', fetchError.message);
+    return res.status(200).end();
+  }
+
+  if (!profile) {
+    await sendMessage(
+      chatId,
+      'Please complete and submit your profile in the OneClickHandshake app first, then tap "Link Telegram" again.',
+    );
+    return res.status(200).end();
+  }
+
+  const { error: updateError } = await supabase
+    .from('profiles')
+    .update({ telegram_chat_id: String(chatId) })
+    .eq('id', userId);
+
+  if (updateError) {
+    console.error('[telegram/webhook] telegram_chat_id update error:', updateError.message);
+    await sendMessage(chatId, 'Something went wrong linking your account. Please try again.');
+    return res.status(200).end();
+  }
+
+  await sendMessage(chatId, 'Telegram linked! You will receive bot notifications and Q&A prompts here.');
+  return res.status(200).end();
+}

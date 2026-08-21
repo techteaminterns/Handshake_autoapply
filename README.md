@@ -2,7 +2,7 @@
 
 Browser-automation bot that applies to Handshake jobs on a student's behalf, driven by a one-time onboarding form and orchestrated as durable Vercel Workflow steps.
 
-> **Status:** Phase 1 — Supabase schema + RLS shipped; onboarding API and RN screen are next.
+> **Status:** Phase 1 (Slice A2 in progress) — Backend API routes and React Native Expo frontend implementation completed. Remaining work in Phase A2 is to test and finish.
 
 ---
 
@@ -48,7 +48,7 @@ All six spec files live under [`ProjectDocs/`](./ProjectDocs/):
 
 ## Phase 1 — What was shipped
 
-### Supabase schema (`supabase/migrations/20260820000000_initial_schema.sql`)
+### 1. Supabase schema (`supabase/migrations/20260820000000_initial_schema.sql`)
 
 All six tables defined in `05-backend-schema.md`, applied in a single migration:
 
@@ -68,7 +68,21 @@ All six tables defined in `05-backend-schema.md`, applied in a single migration:
 - FK columns on `resumes`, `documents`, `reusable_answers`, `bot_runs`, `gmail_oauth_tokens` — all indexed.
 - Composite `(profile_id, question_text)` on `reusable_answers` for the "check before asking again" lookup.
 
-### Agent rules (`.agents/rules/`)
+### 2. Backend API routes (`api/`)
+
+- [`api/onboarding.js`](./api/onboarding.js): Accepts authenticated onboarding form payload, validates `.edu` student emails, enforces `<1MB` PDF resume constraint, uploads to Supabase Storage, upserts to `profiles`, records in `resumes`, and returns `{ profile_id, resume_url }`.
+- [`api/telegram/webhook.js`](./api/telegram/webhook.js): Handles `/start <user_id>` deep links from Telegram and links `telegram_chat_id` to the student's profile.
+- [`api/oauth/gmail/start.js`](./api/oauth/gmail/start.js): Initiates Google OAuth consent with `gmail.readonly` scope for users with existing Handshake accounts.
+- [`api/oauth/gmail/callback.js`](./api/oauth/gmail/callback.js): Exchanges Google auth code for tokens, encrypts `refresh_token` using AES-256-GCM, and upserts to `gmail_oauth_tokens` via service role.
+
+### 3. Frontend React Native app (`src/frontend/`)
+
+- Built as a self-contained sub-project with its own `package.json` and Expo dependencies.
+- [`src/frontend/config.js`](./src/frontend/config.js) & [`src/frontend/utils/supabase.js`](./src/frontend/utils/supabase.js): Dynamically imports all endpoints and keys from root [`env.js`](./env.js) (no hardcoded secrets).
+- [`src/frontend/screens/AuthScreen.js`](./src/frontend/screens/AuthScreen.js): Email & password authentication view for Supabase session management.
+- [`src/frontend/screens/OnboardingScreen.js`](./src/frontend/screens/OnboardingScreen.js): Full 20-field onboarding form with client-side PDF picker, direct upload to Supabase Storage, live Telegram linking polling, conditional Gmail OAuth trigger, and a read-only recap state with an "Edit Profile" toggle.
+
+### 4. Agent rules (`.agents/rules/`)
 
 Four scoped rule files govern each area of the codebase:
 
@@ -79,31 +93,24 @@ Four scoped rule files govern each area of the codebase:
 | [`bot_playwright.md`](./.agents/rules/bot_playwright.md) | `bot/**, workflows/steps/**` | `playwright-core` + `@sparticuz/chromium` only; Quick Apply preferred; always "Upload new"; 300/day cap checked per action |
 | [`workflows.md`](./.agents/rules/workflows.md) | `workflows/**, api/bot/**` | `'use workflow'` / `'use step'` only; no bare polling loops; long waits are workflow-level pauses; every branch ends at `safeExit` |
 
-### RLS checkpoint test (`1test.js`)
-
-Quick smoke test confirming cross-user reads return an empty array (not leaked data):
-
-```bash
-node 1test.js
-```
-
-Requires `.env.development.local` with `SUPABASE_URL` and `SUPABASE_ANON_KEY` set, and two seeded test users in the project's Supabase instance.
-
 ---
 
 ## Environment variables
 
+All environment variables are loaded through [`env.js`](./env.js) from `.env.development.local`:
+
 | Variable | Used by | Notes |
 |---|---|---|
-| `SUPABASE_URL` | All API routes, RLS test | Public project URL |
-| `SUPABASE_ANON_KEY` | App & API routes | Client role; enforced by RLS |
-| `SUPABASE_SERVICE_ROLE_KEY` | OAuth callback, Telegram webhook, cron | Never exposed to client |
-| `TELEGRAM_BOT_TOKEN` | Telegram webhook | App-level secret; per-user linkage via `chat_id` only |
+| `SUPABASE_URL` | All API routes, App, RLS test | Public project URL |
+| `SUPABASE_ANON_KEY` | API routes & RLS test | Client role; enforced by RLS |
+| `SUPABASE_PUBLISHABLE_KEY` | React Native frontend client | Client publishable key |
+| `SUPABASE_SERVICE_ROLE_KEY` | OAuth callback, Telegram webhook | Service role; never exposed to client |
+| `TELEGRAM_BOT_TOKEN` | Telegram webhook | App-level bot token |
+| `TELEGRAM_BOT_USERNAME` | App deep linking | Bot username (`simpleclickonetimeusetestbot`) |
 | `GOOGLE_OAUTH_CLIENT_ID` | Gmail OAuth start/callback | Google Cloud project, Testing status |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Gmail OAuth callback | Never returned to client |
+| `ENCRYPTION_KEY` | Gmail OAuth token encryption | 32-byte hex string for AES-256-GCM |
 | `RESEND_API_KEY` | Daily report (Phase 6) | Not yet wired |
-
-Store all secrets in Vercel environment variables; never commit plaintext credentials.
 
 ---
 
@@ -118,10 +125,9 @@ Store all secrets in Vercel environment variables; never commit plaintext creden
 
 ---
 
-## What's next (Phase 1 remainder → Phase 2)
+## Remaining work in Phase A2
 
-- `/api/onboarding` — writes `profiles` row + uploads resume to Supabase Storage.
-- `/api/telegram/webhook` — captures `chat_id` on "start" deep-link event.
-- `/api/oauth/gmail/start` + `/api/oauth/gmail/callback` — per-user Gmail readonly consent + encrypted token storage.
-- React Native onboarding screen — all fields from `04-ui-ux.md`, Telegram link button, conditional Gmail OAuth button.
-- Phase 2: `handshakeBotWorkflow` skeleton, `createAccount` step, `otpLogin` step.
+- End-to-end testing of the onboarding submission flow (`/api/onboarding`).
+- Smoke testing Telegram webhook (`/api/telegram/webhook`) and Gmail OAuth callback (`/api/oauth/gmail/*`).
+- Verify post-submit recap and edit-unlock flow in the React Native UI.
+- Phase 2: `handshakeBotWorkflow` skeleton, `createAccount` step, and `otpLogin` step.
