@@ -53,12 +53,13 @@ export default async function handler(req, res) {
   if (!message) return res.status(200).end();
 
   const chatId = message.chat?.id;
-  const text   = (message.text ?? '').trim();
+  const text = (message.text ?? '').trim();
 
   if (!text.startsWith('/start')) return res.status(200).end();
 
-  const parts  = text.split(' ');
-  const userId = parts[1]?.trim();
+  // Extract start payload (e.g. "/start <userId>", "/start=<userId>", "/start_<userId>")
+  const match = text.match(/^\/start(?:[ =_](\S+))?/);
+  const userId = match && match[1] ? match[1].trim() : null;
 
   if (!userId) {
     await sendMessage(chatId, 'Welcome! To link your Telegram account, tap "Link Telegram" inside the OneClickHandshake app.');
@@ -75,32 +76,16 @@ export default async function handler(req, res) {
 
   const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-  const { data: profile, error: fetchError } = await supabase
-    .from('profiles')
-    .select('id, telegram_chat_id')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (fetchError) {
-    console.error('[telegram/webhook] profile fetch error:', fetchError.message);
-    return res.status(200).end();
-  }
-
-  if (!profile) {
-    await sendMessage(
-      chatId,
-      'Please complete and submit your profile in the OneClickHandshake app first, then tap "Link Telegram" again.',
-    );
-    return res.status(200).end();
-  }
-
+  // Link telegram_chat_id to profile for userId via upsert
   const { error: updateError } = await supabase
     .from('profiles')
-    .update({ telegram_chat_id: String(chatId) })
-    .eq('id', userId);
+    .upsert(
+      { id: userId, telegram_chat_id: String(chatId) },
+      { onConflict: 'id' }
+    );
 
   if (updateError) {
-    console.error('[telegram/webhook] telegram_chat_id update error:', updateError.message);
+    console.error('[telegram/webhook] telegram_chat_id upsert error:', updateError.message);
     await sendMessage(chatId, 'Something went wrong linking your account. Please try again.');
     return res.status(200).end();
   }

@@ -272,7 +272,15 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   }
 
   function openTelegram() {
-    Linking.openURL(`https://t.me/${TELEGRAM_BOT}?start=${userId}`);
+    if (!userId) {
+      Alert.alert('Error', 'Please sign in first before linking Telegram.');
+      return;
+    }
+    const botName = (TELEGRAM_BOT || 'simpleclickonetimeusetestbot').replace(/^@/, '');
+    const url = `https://t.me/${botName}?start=${encodeURIComponent(userId)}`;
+    Linking.openURL(url).catch(err => {
+      console.warn('[Onboarding] openTelegram error:', err);
+    });
     setTgState('pending');
   }
 
