@@ -155,15 +155,16 @@ function profileToDraft(p) {
 export default function OnboardingScreen({ userId, accessToken, existingProfile, onProfileSaved }) {
   const [draft,        setDraft]        = useState(() => profileToDraft(existingProfile));
   const [errors,       setErrors]       = useState({});
+  const [submitError,  setSubmitError]  = useState(null);
   const [tgState,      setTgState]      = useState(existingProfile?.telegram_chat_id ? 'linked' : 'unlinked');
   const [gmailState,   setGmailState]   = useState('disconnected');
   const [mode,         setMode]         = useState(existingProfile ? 'submitted' : 'editing');
   const [resumeBusy,   setResumeBusy]   = useState(false);
-  const tgPollRef = useRef(null);
 
   useEffect(() => {
     supabase.from('gmail_oauth_tokens').select('id').eq('profile_id', userId).maybeSingle()
-      .then(({ data }) => { if (data) setGmailState('connected'); });
+      .then(({ data }) => { if (data) setGmailState('connected'); })
+      .catch(() => {});
   }, [userId]);
 
   useEffect(() => {
@@ -172,12 +173,13 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     }
   }, [existingProfile?.telegram_chat_id]);
 
+  // Realtime subscription + polling for telegram_chat_id
   useEffect(() => {
-    if (tgState !== 'pending' || !userId) return;
+    if (!userId || tgState === 'linked') return;
 
     // 1. Supabase Realtime subscription listening for updates on the profiles row
     const channel = supabase
-      .channel(`public:profiles:${userId}`)
+      .channel(`realtime:profiles:${userId}`)
       .on(
         'postgres_changes',
         {
@@ -198,21 +200,25 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       )
       .subscribe();
 
-    // 2. Active polling fallback (checks every 2 seconds)
+    // 2. Active polling fallback (checks every 2 seconds when pending, 5 seconds otherwise)
     const interval = setInterval(async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .maybeSingle();
 
-      if (data?.telegram_chat_id) {
-        setTgState('linked');
-        if (onProfileSaved && data) {
-          onProfileSaved(data);
+        if (data?.telegram_chat_id) {
+          setTgState('linked');
+          if (onProfileSaved && data) {
+            onProfileSaved(data);
+          }
         }
+      } catch (err) {
+        console.warn('[Onboarding] telegram check error:', err);
       }
-    }, 2000);
+    }, tgState === 'pending' ? 2000 : 5000);
 
     return () => {
       clearInterval(interval);
@@ -223,6 +229,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   function set(key, val) {
     setDraft(d => ({ ...d, [key]: val }));
     setErrors(e => { const n = { ...e }; delete n[key]; return n; });
+    if (submitError) setSubmitError(null);
   }
   function toggleJobType(val) {
     setDraft(d => ({
@@ -292,8 +299,10 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   }
 
   async function submit() {
+    setSubmitError(null);
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
+    setErrors({});
     setMode('submitting');
     const csv = str => str.trim() ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
     const payload = {
@@ -321,10 +330,10 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Submission failed.');
       const { data: saved } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      onProfileSaved(saved);
+      if (onProfileSaved && saved) onProfileSaved(saved);
       setMode('submitted');
     } catch (err) {
-      setErrors({ submit: err.message });
+      setSubmitError(err.message || 'Submission failed.');
       setMode('editing');
     }
   }
@@ -471,7 +480,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
         </>
       )}
 
-      <ErrorText message={errors.submit} />
+      <ErrorText message={submitError} />
       <TouchableOpacity
         style={[s.btn, s.submitBtn, mode==='submitting'&&s.btnDisabled]}
         onPress={submit} disabled={mode==='submitting'}
@@ -482,7 +491,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       </TouchableOpacity>
       {existingProfile && (
         <TouchableOpacity style={s.cancelBtn}
-          onPress={() => { setDraft(profileToDraft(existingProfile)); setMode('submitted'); setErrors({}); }}
+          onPress={() => { setDraft(profileToDraft(existingProfile)); setMode('submitted'); setErrors({}); setSubmitError(null); }}
         >
           <Text style={s.cancelTxt}>Cancel</Text>
         </TouchableOpacity>
