@@ -25,19 +25,16 @@ jobs:
             package-lock.json
             src/frontend/package-lock.json
 
-      - name: Install Root Dependencies
-        run: npm install
-
-      - name: Install Frontend Dependencies
-        working-directory: src/frontend
-        run: npm install --legacy-peer-deps
+      - name: Typecheck Root
+        run: |
+          npm install
+          npx tsc --noEmit
 
       - name: Typecheck Frontend
         working-directory: src/frontend
-        run: npx tsc --noEmit
-
-      - name: Typecheck Root
-        run: npx tsc --noEmit
+        run: |
+          npm install --legacy-peer-deps
+          npx tsc --noEmit
 
   deploy:
     name: Deploy to Vercel (Production)
