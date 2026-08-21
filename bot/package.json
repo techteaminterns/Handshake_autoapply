@@ -1,0 +1,19 @@
+{
+  "name": "bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Side B - Browser automation flows for Handshake bot",
+  "dependencies": {
+    "@sparticuz/chromium": "^147.0.0",
+    "playwright-core": "^1.62.1"
+  },
+  "devDependencies": {
+    "dotenv": "^17.4.2"
+  }
+}
