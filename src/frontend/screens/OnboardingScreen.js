@@ -161,17 +161,32 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   const [mode,         setMode]         = useState(existingProfile ? 'submitted' : 'editing');
   const [resumeBusy,   setResumeBusy]   = useState(false);
 
+  // Only check gmail token status when in read-only recap (profile already saved).
+  // Avoids hitting the RLS-blocked gmail_oauth_tokens table on a fresh mount.
   useEffect(() => {
+    if (mode !== 'submitted') return;
     supabase.from('gmail_oauth_tokens').select('id').eq('profile_id', userId).maybeSingle()
       .then(({ data }) => { if (data) setGmailState('connected'); })
       .catch(() => {});
-  }, [userId]);
+  }, [mode, userId]);
 
+  // Sync telegram link status whenever the parent passes a fresh profile.
   useEffect(() => {
     if (existingProfile?.telegram_chat_id) {
       setTgState('linked');
     }
   }, [existingProfile?.telegram_chat_id]);
+
+  // Sync mode when App.tsx delivers the profile after the initial render.
+  // Without this, a user who has already submitted stays in 'editing' until
+  // they manually interact, which could trigger a spurious API call.
+  useEffect(() => {
+    if (existingProfile && mode === 'editing') {
+      setMode('submitted');
+      setDraft(profileToDraft(existingProfile));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingProfile]);
 
   // Realtime subscription + polling for telegram_chat_id
   useEffect(() => {

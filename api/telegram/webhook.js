@@ -57,9 +57,10 @@ export default async function handler(req, res) {
 
   if (!text.startsWith('/start')) return res.status(200).end();
 
-  // Extract start payload (e.g. "/start <userId>", "/start=<userId>", "/start_<userId>")
-  const match = text.match(/^\/start(?:[ =_](\S+))?/);
-  const userId = match && match[1] ? match[1].trim() : null;
+  // Telegram sends "/start <payload>" (space-separated) when the user opens a
+  // deep link with ?start=<payload>. The payload here is the Supabase user ID.
+  const parts = text.split(/\s+/);
+  const userId = parts.length > 1 ? parts[1].trim() : null;
 
   if (!userId) {
     await sendMessage(chatId, 'Welcome! To link your Telegram account, tap "Link Telegram" inside the OneClickHandshake app.');
@@ -76,17 +77,25 @@ export default async function handler(req, res) {
 
   const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-  // Link telegram_chat_id to profile for userId via upsert
-  const { error: updateError } = await supabase
+  // UPDATE only — never insert. If no profile row exists yet (form not submitted)
+  // the update affects 0 rows and we prompt the user to complete onboarding first.
+  // Using upsert here would violate NOT NULL constraints on all required profile fields.
+  const { data: updated, error: updateError } = await supabase
     .from('profiles')
-    .upsert(
-      { id: userId, telegram_chat_id: String(chatId) },
-      { onConflict: 'id' }
-    );
+    .update({ telegram_chat_id: String(chatId) })
+    .eq('id', userId)
+    .select('id')
+    .maybeSingle();
 
   if (updateError) {
-    console.error('[telegram/webhook] telegram_chat_id upsert error:', updateError.message);
+    console.error('[telegram/webhook] telegram_chat_id update error:', updateError.message);
     await sendMessage(chatId, 'Something went wrong linking your account. Please try again.');
+    return res.status(200).end();
+  }
+
+  if (!updated) {
+    // No profile row found — user hasn't completed onboarding yet.
+    await sendMessage(chatId, 'No profile found. Please complete the onboarding form in the OneClickHandshake app first, then tap "Link Telegram" again.');
     return res.status(200).end();
   }
 
