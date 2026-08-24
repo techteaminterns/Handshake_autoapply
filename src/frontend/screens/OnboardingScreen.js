@@ -184,14 +184,59 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     }
   };
 
-  // Only check gmail token status when in read-only recap (profile already saved).
-  // Avoids hitting the RLS-blocked gmail_oauth_tokens table on a fresh mount.
+  // Check gmail token status on mount / mode change
   useEffect(() => {
-    if (mode !== 'submitted') return;
+    if (!userId) return;
     supabase.from('gmail_oauth_tokens').select('id').eq('profile_id', userId).maybeSingle()
       .then(({ data }) => { if (data) setGmailState('connected'); })
       .catch(() => {});
   }, [mode, userId]);
+
+  // Realtime subscription + polling for gmail_oauth_tokens (starts when connecting, clears when confirmed)
+  useEffect(() => {
+    if (!userId || gmailState !== 'pending') return;
+
+    // 1. Supabase Realtime subscription listening for updates/inserts on gmail_oauth_tokens
+    const channel = supabase
+      .channel(`realtime:gmail_oauth_tokens:${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'gmail_oauth_tokens',
+          filter: `profile_id=eq.${userId}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            setGmailState('connected');
+          }
+        }
+      )
+      .subscribe();
+
+    // 2. Active polling fallback (checks every 2 seconds while pending)
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await supabase
+          .from('gmail_oauth_tokens')
+          .select('id')
+          .eq('profile_id', userId)
+          .maybeSingle();
+
+        if (data) {
+          setGmailState('connected');
+        }
+      } catch (err) {
+        console.warn('[Onboarding] gmail token check error:', err);
+      }
+    }, 2000);
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [gmailState, userId]);
 
   // Sync telegram link status whenever the parent passes a fresh profile.
   useEffect(() => {
@@ -412,9 +457,10 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
         </View>
         <View style={s.recapAction}>
           <Text style={s.recapLabel}>Gmail (readonly)</Text>
-          {gmailState==='connected' ? <Text style={s.badge}>Connected ✓</Text>
+          {gmailState==='connected' ? <Text style={s.badge}>Connected (readonly) ✓</Text>
           :gmailState==='pending'   ? <ActivityIndicator size="small" color="#2563eb" />
           : <TouchableOpacity style={s.smallBtn} onPress={openGmailOAuth}><Text style={s.smallBtnTxt}>Connect Gmail</Text></TouchableOpacity>}
+        </View>
         <View style={s.btnRow}>
           <TouchableOpacity style={[s.btn, s.editBtn, s.flexBtn]} onPress={() => setMode('editing')}>
             <Text style={s.btnTxt}>Edit Profile</Text>
@@ -517,7 +563,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
 
       <SectionHeader title="Gmail Access" />
       <Text style={s.helper}>Read-only access — used only to read the Handshake one-time password sent to your inbox. We never store your email password or read any other emails.</Text>
-      {gmailState==='connected' ? <Text style={s.badge}>Gmail connected ✓</Text>
+      {gmailState==='connected' ? <Text style={s.badge}>Gmail connected (readonly) ✓</Text>
       :gmailState==='pending'   ? <View style={s.pendingRow}><ActivityIndicator size="small" color="#2563eb"/><Text style={s.pendingTxt}>Connecting...</Text></View>
       : <>
           {gmailState==='error' && <ErrorText message="Connection failed — tap to retry." />}
