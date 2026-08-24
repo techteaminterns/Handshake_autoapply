@@ -19,8 +19,8 @@ import {
 } from 'react-native';
 import { supabase } from '../utils/supabase.js';
 
-export default function AuthScreen() {
-  const [mode, setMode]       = useState('signin'); // 'signin' | 'signup'
+export default function AuthScreen({ initialMode = 'signup' }) {
+  const [mode, setMode]       = useState(initialMode); // 'signin' | 'signup'
   const [email, setEmail]     = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);

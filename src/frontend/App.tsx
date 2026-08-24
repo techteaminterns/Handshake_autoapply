@@ -85,13 +85,18 @@ export default function App() {
             <StatusBar style="auto" />
             {session ? (
                 <OnboardingScreen
+                    key={session.user.id}
                     userId={session.user.id}
                     accessToken={session.access_token}
                     existingProfile={profile}
                     onProfileSaved={(saved: any) => setProfile(saved)}
+                    onSignOut={() => {
+                        setSession(null);
+                        setProfile(null);
+                    }}
                 />
             ) : (
-                <AuthScreen />
+                <AuthScreen initialMode="signup" />
             )}
         </View>
     );

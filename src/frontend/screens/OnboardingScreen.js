@@ -17,7 +17,7 @@
  *   App polls profiles.telegram_chat_id every 3s while state = pending.
  *
  * Gmail OAuth: opens /api/oauth/gmail/start in system browser with access_token
- *   as query param. Only shown when has_existing_handshake_account = true.
+ *   as query param. Offered unconditionally to all users (Phase A4).
  *
  * Phase: Phase 1 -- RN onboarding screen (06-implementation.md step 4)
  */
@@ -152,7 +152,7 @@ function profileToDraft(p) {
   };
 }
 
-export default function OnboardingScreen({ userId, accessToken, existingProfile, onProfileSaved }) {
+export default function OnboardingScreen({ userId, accessToken, existingProfile, onProfileSaved, onSignOut }) {
   const [draft,        setDraft]        = useState(() => profileToDraft(existingProfile));
   const [errors,       setErrors]       = useState({});
   const [submitError,  setSubmitError]  = useState(null);
@@ -160,6 +160,29 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   const [gmailState,   setGmailState]   = useState('disconnected');
   const [mode,         setMode]         = useState(existingProfile ? 'submitted' : 'editing');
   const [resumeBusy,   setResumeBusy]   = useState(false);
+
+  const handleCreateNewProfile = async () => {
+    try {
+      setDraft({ ...EMPTY_DRAFT });
+      setErrors({});
+      setSubmitError(null);
+      setTgState('unlinked');
+      setGmailState('disconnected');
+      setMode('editing');
+      setResumeBusy(false);
+
+      if (onProfileSaved) {
+        onProfileSaved(null);
+      }
+      if (onSignOut) {
+        onSignOut();
+      }
+
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('[Onboarding] Sign out error:', err);
+    }
+  };
 
   // Only check gmail token status when in read-only recap (profile already saved).
   // Avoids hitting the RLS-blocked gmail_oauth_tokens table on a fresh mount.
@@ -387,17 +410,19 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
           :tgState==='pending' ? <ActivityIndicator size="small" color="#2563eb" />
           : <TouchableOpacity style={s.smallBtn} onPress={openTelegram}><Text style={s.smallBtnTxt}>Link Telegram</Text></TouchableOpacity>}
         </View>
-        {draft.has_existing_handshake_account === true && (
-          <View style={s.recapAction}>
-            <Text style={s.recapLabel}>Gmail (readonly)</Text>
-            {gmailState==='connected' ? <Text style={s.badge}>Connected ✓</Text>
-            :gmailState==='pending'   ? <ActivityIndicator size="small" color="#2563eb" />
-            : <TouchableOpacity style={s.smallBtn} onPress={openGmailOAuth}><Text style={s.smallBtnTxt}>Connect Gmail</Text></TouchableOpacity>}
-          </View>
-        )}
-        <TouchableOpacity style={[s.btn, s.editBtn]} onPress={() => setMode('editing')}>
-          <Text style={s.btnTxt}>Edit Profile</Text>
-        </TouchableOpacity>
+        <View style={s.recapAction}>
+          <Text style={s.recapLabel}>Gmail (readonly)</Text>
+          {gmailState==='connected' ? <Text style={s.badge}>Connected ✓</Text>
+          :gmailState==='pending'   ? <ActivityIndicator size="small" color="#2563eb" />
+          : <TouchableOpacity style={s.smallBtn} onPress={openGmailOAuth}><Text style={s.smallBtnTxt}>Connect Gmail</Text></TouchableOpacity>}
+        <View style={s.btnRow}>
+          <TouchableOpacity style={[s.btn, s.editBtn, s.flexBtn]} onPress={() => setMode('editing')}>
+            <Text style={s.btnTxt}>Edit Profile</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.btn, s.createBtn, s.flexBtn]} onPress={handleCreateNewProfile}>
+            <Text style={s.btnTxt}>Create New Profile</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     );
   }
@@ -490,18 +515,14 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       </View>
       <ErrorText message={errors.has_existing_handshake_account} />
 
-      {draft.has_existing_handshake_account === true && (
-        <>
-          <SectionHeader title="Gmail Access" />
-          <Text style={s.helper}>Read-only access -- used only to read the Handshake one-time password sent to your inbox. We never store your email password.</Text>
-          {gmailState==='connected' ? <Text style={s.badge}>Gmail connected ✓</Text>
-          :gmailState==='pending'   ? <View style={s.pendingRow}><ActivityIndicator size="small" color="#2563eb"/><Text style={s.pendingTxt}>Connecting...</Text></View>
-          : <>
-              {gmailState==='error' && <ErrorText message="Connection failed -- tap to retry." />}
-              <TouchableOpacity style={s.btn} onPress={openGmailOAuth}><Text style={s.btnTxt}>Connect Gmail (readonly)</Text></TouchableOpacity>
-            </>}
-        </>
-      )}
+      <SectionHeader title="Gmail Access" />
+      <Text style={s.helper}>Read-only access — used only to read the Handshake one-time password sent to your inbox. We never store your email password or read any other emails.</Text>
+      {gmailState==='connected' ? <Text style={s.badge}>Gmail connected ✓</Text>
+      :gmailState==='pending'   ? <View style={s.pendingRow}><ActivityIndicator size="small" color="#2563eb"/><Text style={s.pendingTxt}>Connecting...</Text></View>
+      : <>
+          {gmailState==='error' && <ErrorText message="Connection failed — tap to retry." />}
+          <TouchableOpacity style={s.btn} onPress={openGmailOAuth}><Text style={s.btnTxt}>Connect Gmail (readonly)</Text></TouchableOpacity>
+        </>}
 
       <ErrorText message={submitError} />
       <TouchableOpacity
@@ -575,7 +596,10 @@ const s = StyleSheet.create({
   btnDisabled: { backgroundColor: '#93c5fd' },
   btnTxt:      { color: '#fff', fontSize: 16, fontWeight: '600' },
   submitBtn:   { marginTop: 28 },
-  editBtn:     { backgroundColor: '#475569', marginTop: 20 },
+  btnRow:      { flexDirection: 'row', gap: 12, marginTop: 20 },
+  flexBtn:     { flex: 1, marginTop: 0 },
+  editBtn:     { backgroundColor: '#475569', marginTop: 0 },
+  createBtn:   { backgroundColor: ACCENT, marginTop: 0 },
   cancelBtn:   { padding: 14, alignItems: 'center', marginTop: 4 },
   cancelTxt:   { color: GRAY, fontSize: 15 },
   smallBtn:    { borderWidth: 1, borderColor: ACCENT, borderRadius: 6, paddingVertical: 6, paddingHorizontal: 12 },

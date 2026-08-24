@@ -2,7 +2,7 @@
 
 Browser-automation bot that applies to Handshake jobs on a student's behalf, driven by a one-time onboarding form and orchestrated as durable Vercel Workflow steps.
 
-> **Status:** Phase 1 (Slice A1 & A2 completed) — Supabase schema, RLS policies, serverless API routes (`/api/`), Telegram bot linking with Realtime sync, Google OAuth for Gmail, and React Native (Expo) onboarding UI implemented and verified.
+> **Status:** Phase 1 (Slices A1, A2 & A4 completed) — Supabase schema, RLS policies, serverless API routes (`/api/`), Telegram bot linking with Realtime sync, Google OAuth for Gmail (Phase A4: HMAC-signed state, AES-256-GCM token encryption, `readOtpFromGmail`), and React Native (Expo) onboarding UI implemented and verified.
 
 ---
 
@@ -78,8 +78,13 @@ Vercel Serverless Functions reading directly from `process.env` (free of Expo or
   - **Generic Message Sender (`sendTelegramMessage`)**: Exported module-level utility supporting formatted HTML/Markdown messages, reply keyboards, and custom message IDs.
   - **Generic Reply Dispatcher (`onTelegramReply`)**: Exported module-level receiver for user responses, architected for Phase A7 workflow resumption and `reusable_answers` caching.
 - [`test-telegram.js`](./test-telegram.js): Standalone verification script for testing bot messaging via CLI arguments or environment variables (`node test-telegram.js <chatId> <botToken>`).
-- [`api/oauth/gmail/start.js`](./api/oauth/gmail/start.js): Initiates Google OAuth consent with `gmail.readonly` scope for users with existing Handshake accounts.
-- [`api/oauth/gmail/callback.js`](./api/oauth/gmail/callback.js): Exchanges Google auth code for tokens, encrypts `refresh_token` using AES-256-GCM, and upserts to `gmail_oauth_tokens` via service role.
+- [`api/oauth/gmail/start.js`](./api/oauth/gmail/start.js): Initiates Google OAuth consent with `gmail.readonly` scope. **Phase A4:** offered unconditionally to all users with a profile (not gated on `has_existing_handshake_account`). State param is HMAC-SHA256 signed (10-min TTL) for CSRF protection.
+- [`api/oauth/gmail/callback.js`](./api/oauth/gmail/callback.js): Verifies HMAC state, exchanges Google auth code for tokens via `googleapis` `oauth2Client.getToken()`, encrypts `refresh_token` with AES-256-GCM (`GMAIL_TOKEN_ENC_KEY`), and upserts to `gmail_oauth_tokens` via service role.
+- **New lib modules (Phase A4):**
+  - [`lib/crypto/tokenCipher.js`](./lib/crypto/tokenCipher.js): `encryptToken()` / `decryptToken()` — AES-256-GCM, wire format `iv(12)‖authTag(16)‖ciphertext`, base64-encoded.
+  - [`lib/oauth/state.js`](./lib/oauth/state.js): `createState()` / `verifyState()` — HMAC-SHA256 signed OAuth state tokens with nonce + expiry.
+  - [`lib/supabase/admin.js`](./lib/supabase/admin.js): `createSupabaseAdmin()` — service-role Supabase client, used only in server-side routes.
+  - [`lib/gmail/readOtpFromGmail.js`](./lib/gmail/readOtpFromGmail.js): `readOtpFromGmail(profileId)` — decrypts stored refresh token, queries Gmail API (`from:portgasdiscordace@gmail.com after:<10min>`), decodes MIME body, extracts 6-digit OTP with regex. Throws on all failures; retry/sleep lives at the workflow step level.
 
 ---
 
@@ -124,7 +129,7 @@ sequenceDiagram
   - Isolated submit error handling (`submitError` state) preventing premature error messages on mount.
   - Deep linking to Telegram with current `userId` parameter (`https://t.me/<bot>?start=<userId>`).
   - Supabase Realtime subscription on `public:profiles` (`id=eq.${userId}`) + interval polling to instantly reflect "Telegram linked ✓" status when `/start` is received.
-  - Conditional Gmail OAuth trigger and read-only recap state with an "Edit Profile" toggle.
+  - Unconditional Gmail OAuth trigger, read-only recap state with "Edit Profile" and "Create New Profile" buttons (supporting session sign-out and form reset without page reload).
 
 ### 4. Agent rules (`.agents/rules/`)
 
@@ -153,7 +158,9 @@ All environment variables are loaded from `.env.development.local` (or Vercel pr
 | `TELEGRAM_BOT_USERNAME` | App deep linking | Bot username (`simpleclickonetimeusetestbot`) |
 | `GOOGLE_OAUTH_CLIENT_ID` | Gmail OAuth start/callback | Google Cloud project, Testing status |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Gmail OAuth callback | Never returned to client |
-| `ENCRYPTION_KEY` | Gmail OAuth token encryption | 32-byte hex string for AES-256-GCM |
+| `ENCRYPTION_KEY` | Gmail OAuth token encryption (legacy name) | 32-byte hex string for AES-256-GCM; superseded by `GMAIL_TOKEN_ENC_KEY` |
+| `GMAIL_TOKEN_ENC_KEY` | Gmail OAuth token encryption (Phase A4) | 32-byte hex AES-256-GCM key; `tokenCipher.js` checks this first, falls back to `ENCRYPTION_KEY` |
+| `OAUTH_STATE_SECRET` | OAuth CSRF state signing (Phase A4) | 32-byte hex HMAC-SHA256 key; signs/verifies the `state` param in the Gmail OAuth flow |
 | `RESEND_API_KEY` | Daily report (Phase 6) | Not yet wired |
 
 ---
