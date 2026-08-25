@@ -3,7 +3,15 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "run-all": "node scripts/run-all-flows.js",
+    "test-b0": "node scripts/test-launch.js",
+    "test-b1": "node scripts/test-b1.js",
+    "run-csv-signup": "node scripts/run-csv-signup.js",
+    "test-b2": "node scripts/test-b2.js",
+    "test-b3": "node scripts/test-b3.js",
+    "test-manual": "node scripts/test-manual-flow.js",
+    "capture-data": "node scripts/capture-signup-data.js"
   },
   "keywords": [],
   "author": "",
@@ -11,6 +19,7 @@
   "description": "Side B - Browser automation flows for Handshake bot",
   "dependencies": {
     "@sparticuz/chromium": "^147.0.0",
+    "csv-writer": "^1.6.0",
     "playwright-core": "^1.62.1"
   },
   "devDependencies": {
