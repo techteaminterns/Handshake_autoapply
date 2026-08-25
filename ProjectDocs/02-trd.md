@@ -27,9 +27,10 @@ Single Vercel deployment (TypeScript throughout) hosting: the API routes the RN 
 - **Telegram Fallback service** — webhook receives missing document/answer, writes it to Supabase, resumes the paused workflow step.
 - **Reusable Answers Store** — Supabase table of prior Q&A/document mappings, checked before ever prompting the user again.
 - **Daily Report job** — Vercel Cron → queries Supabase for the day's applications → sends via Resend.
+- **Mock Handshake test site** — `/mock-handshake` routes on the same Vercel deployment, standing in for real Handshake during bot development/testing so the flow can be exercised without a real Handshake account or a real student email inbox. Signup flow: email entry → school dropdown → SSO/set password (this is where **live handoff** triggers) → onboarding questions → done. Apply flow: a job page with Quick Apply/Apply buttons, document upload, and screening questions. OTP test emails are sent from `portgasdiscordace@gmail.com` so `readOtpFromGmail` can be exercised against a real inbox. DOM selectors on every mock page mirror real Handshake's exactly, so Side B's Playwright code works unmodified against both the mock site and real Handshake.
 
 ## APIs / Integrations
-- **Gmail API (readonly)** — per-user OAuth consent, requested only when `has_existing_handshake_account = true`. Restricted scope: this phase runs in Google's "Testing" publishing status with allowlisted test accounts, avoiding formal verification. Refresh tokens stored encrypted, service-role read only, never exposed to the client.
+- **Gmail API (readonly)** — per-user OAuth consent, requested from every user during onboarding regardless of `has_existing_handshake_account`. Restricted scope: this phase runs in Google's "Testing" publishing status with allowlisted test accounts, avoiding formal verification. Refresh tokens stored encrypted, service-role read only, never exposed to the client.
 - **Telegram Bot API** — single app-level bot token (env secret), not per-user. Each user links their own Telegram via a deep-link "start" flow that captures their `chat_id`; the bot then messages that `chat_id` for missing docs/answers.
 - Resend API — outbound email only.
 - No Handshake API (none exists) — browser automation only.

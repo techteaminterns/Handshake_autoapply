@@ -12,8 +12,8 @@
 
 ### 1. Onboarding Form
 - **Purpose:** collect the fixed field set into Supabase before any bot activity.
-- **Key elements:** name (first/last), email, phone, school, major, degree pursuing, grad month/year, school-specific info (text), resume upload, job types (multi-select: Full-time/Part-time/Internship/Not sure yet), locations open to, job interests, profile visibility (default Community, with the standard explanatory copy), job alerts toggle, "Link Telegram" button (deep link, unconditional), existing-Handshake-account Yes/No, conditional "Connect Gmail (readonly)" OAuth button — rendered only when Yes is selected, with a short explainer that this is read-only and used only to read the Handshake OTP.
-- **States:** empty (defaults blank), validating (email format, resume size/type), telegram-pending/linked, gmail-pending/connected (conditional), error (inline per field), submitted (locked, read-only recap).
+- **Key elements:** name (first/last), email, phone, school, major, degree pursuing, grad month/year, school-specific info (text), resume upload, job types (multi-select: Full-time/Part-time/Internship/Not sure yet), locations open to, job interests, profile visibility (default Community, with the standard explanatory copy), job alerts toggle, "Link Telegram" button (deep link, unconditional), existing-Handshake-account Yes/No, "Connect Gmail (readonly)" OAuth button — shown to every user regardless of the Yes/No answer, with a short explainer that this is read-only and used to read the Handshake OTP.
+- **States:** empty (defaults blank), validating (email format, resume size/type), telegram-pending/linked, gmail-pending/connected, error (inline per field), submitted (locked, read-only recap).
 
 ### 2. Job Link Submission
 - **Purpose:** capture the single Handshake job link that triggers the bot.

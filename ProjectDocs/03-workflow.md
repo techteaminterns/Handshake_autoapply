@@ -17,7 +17,7 @@
 2. Upload resume (PDF <1MB).
 3. Link Telegram — tap deep link → starts chat with the app's single bot → webhook captures `chat_id` → stored on profile.
 4. Answer existing-Handshake-account Yes/No.
-5. **If Yes:** connect Gmail (readonly OAuth) — needed for automated OTP read in the login branch. **If No:** skip; email verification is handled via live handoff instead.
+5. Connect Gmail (readonly OAuth) — required for all users, regardless of the existing-account answer. Used for automated OTP read on the login branch (Yes); collected upfront on the signup branch (No) too, so it's already on file if a later run needs it.
 6. Submit → all fields written to Supabase.
 
 **Job link submission → bot trigger**
@@ -44,6 +44,14 @@
 1. Cron fires once daily.
 2. Query Supabase for the day's applications + any status changes on prior ones.
 3. Send summary email via Resend.
+
+## Mock Handshake test site
+- **Purpose:** exercise the bot's signup/login/apply flows without needing a real Handshake account or a real student email inbox.
+- **Hosted at:** `/mock-handshake` routes on the same Vercel deployment as the app/API.
+- **Signup flow pages:** email entry → school dropdown → SSO/set password (this is the page where **live handoff** triggers, mirroring the real Handshake email-verification pause point) → onboarding questions → done.
+- **Apply flow:** a mock job page with Quick Apply/Apply buttons, document upload, and screening questions.
+- **OTP testing:** OTP emails for the login branch are sent from `portgasdiscordace@gmail.com`, so `readOtpFromGmail` can be tested end-to-end against a real inbox without touching real Handshake.
+- **DOM parity requirement:** selectors on every mock page must mirror real Handshake's DOM exactly, so Side B's bot code runs unmodified against both the mock site and real Handshake.
 
 ## System/data flow
 - Onboarding submit → Supabase write (profile, resume URL) → no bot trigger yet.

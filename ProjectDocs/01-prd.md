@@ -28,7 +28,7 @@ Students on Handshake-eligible campuses manually re-enter the same profile data 
 | Minimal onboarding form | Collects the fixed field set (below) into Supabase | P0 |
 | Resume upload | PDF <1MB → Supabase Storage, linked to user | P0 |
 | Telegram account linking | User connects to the single app-level Telegram bot; `chat_id` stored against profile | P0 |
-| Gmail OAuth consent (readonly) | Conditional — only shown if existing-account = Yes; per-user OAuth, not a password | P0 |
+| Gmail OAuth consent (readonly) | Shown to all users regardless of existing-account answer; per-user OAuth, not a password | P0 |
 | Handshake auth automation | Branch: new account creation (No) vs OTP login (Yes) | P0 |
 | Job-link-triggered apply run | Submitting the Handshake job link kicks off the full bot workflow | P0 |
 | Quick Apply / Apply logic | Prefer Quick Apply when both are present; else Apply | P0 |
