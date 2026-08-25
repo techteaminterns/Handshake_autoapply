@@ -1,6 +1,31 @@
-.env.development.local
+# Environment files
+.env
+.env.*
+.env*.local
+*.env
+*.env.*
+*.local
+**/.env
+**/.env.*
+**/.env*.local
+**/*.env*
+
+# Dependencies
 node_modules/
+**/node_modules/
 
+# Vercel
+.vercel/
+.vercel
+**/.vercel/
+**/.vercel
 
+# Expo & Bundler caches
+.expo/
+**/.expo/
+.metro-cache/
 
-
+# OS & Logs
+.DS_Store
+Thumbs.db
+*.log

@@ -1,10 +1,14 @@
 {
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "googleapis": "^140.0.0"
   },
   "scripts": {
     "test-rls": "1test.js"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
 }

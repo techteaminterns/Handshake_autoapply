@@ -2,7 +2,7 @@
 
 Browser-automation bot that applies to Handshake jobs on a student's behalf, driven by a one-time onboarding form and orchestrated as durable Vercel Workflow steps.
 
-> **Status:** Phase 1 — Supabase schema + RLS shipped; onboarding API and RN screen are next.
+> **Status:** Phase 1 (Slices A1, A2 & A4 completed) — Supabase schema, RLS policies, serverless API routes (`/api/`), Telegram bot linking with Realtime sync, Google OAuth for Gmail (Phase A4: HMAC-signed state, AES-256-GCM token encryption, `readOtpFromGmail`), and React Native (Expo) onboarding UI implemented and verified.
 
 ---
 
@@ -22,7 +22,7 @@ Browser-automation bot that applies to Handshake jobs on a student's behalf, dri
 | Layer | Tool |
 |---|---|
 | Frontend | React Native (Expo) |
-| Backend / DB / Auth | Supabase (Postgres, Storage, RLS) |
+| Backend / DB / Auth | Supabase (Postgres, Storage, RLS, Realtime) |
 | API + orchestration | Vercel Functions + Vercel Workflows |
 | Browser automation | `playwright-core` + `@sparticuz/chromium` |
 | OTP read | Gmail API (readonly OAuth scope) |
@@ -48,7 +48,7 @@ All six spec files live under [`ProjectDocs/`](./ProjectDocs/):
 
 ## Phase 1 — What was shipped
 
-### Supabase schema (`supabase/migrations/20260820000000_initial_schema.sql`)
+### 1. Supabase schema (`supabase/migrations/20260820000000_initial_schema.sql`)
 
 All six tables defined in `05-backend-schema.md`, applied in a single migration:
 
@@ -68,7 +68,70 @@ All six tables defined in `05-backend-schema.md`, applied in a single migration:
 - FK columns on `resumes`, `documents`, `reusable_answers`, `bot_runs`, `gmail_oauth_tokens` — all indexed.
 - Composite `(profile_id, question_text)` on `reusable_answers` for the "check before asking again" lookup.
 
-### Agent rules (`.agents/rules/`)
+### 2. Backend API routes (`api/`)
+
+Vercel Serverless Functions reading directly from `process.env` (free of Expo or bundler dependencies):
+
+- [`api/onboarding.js`](./api/onboarding.js): Accepts authenticated onboarding form payload, validates `.edu` student emails, enforces `<1MB` PDF resume constraint, uploads to Supabase Storage, upserts to `profiles`, records in `resumes`, and returns `{ profile_id, resume_url }`.
+- [`api/telegram/webhook.js`](./api/telegram/webhook.js): Telegram Bot API webhook receiving updates:
+  - **Account Linking (`/start <userId>`)**: Receives the deep link startup payload from Telegram, extracts `chat_id`, and updates `profiles.telegram_chat_id` using the service-role client.
+  - **Generic Message Sender (`sendTelegramMessage`)**: Exported module-level utility supporting formatted HTML/Markdown messages, reply keyboards, and custom message IDs.
+  - **Generic Reply Dispatcher (`onTelegramReply`)**: Exported module-level receiver for user responses, architected for Phase A7 workflow resumption and `reusable_answers` caching.
+- [`test-telegram.js`](./test-telegram.js): Standalone verification script for testing bot messaging via CLI arguments or environment variables (`node test-telegram.js <chatId> <botToken>`).
+- [`api/oauth/gmail/start.js`](./api/oauth/gmail/start.js): Initiates Google OAuth consent with `gmail.readonly` scope. **Phase A4:** offered unconditionally to all users with a profile (not gated on `has_existing_handshake_account`). State param is HMAC-SHA256 signed (10-min TTL) for CSRF protection.
+- [`api/oauth/gmail/callback.js`](./api/oauth/gmail/callback.js): Verifies HMAC state, exchanges Google auth code for tokens via `googleapis` `oauth2Client.getToken()`, encrypts `refresh_token` with AES-256-GCM (`GMAIL_TOKEN_ENC_KEY`), and upserts to `gmail_oauth_tokens` via service role.
+- **New lib modules (Phase A4):**
+  - [`lib/crypto/tokenCipher.js`](./lib/crypto/tokenCipher.js): `encryptToken()` / `decryptToken()` — AES-256-GCM, wire format `iv(12)‖authTag(16)‖ciphertext`, base64-encoded.
+  - [`lib/oauth/state.js`](./lib/oauth/state.js): `createState()` / `verifyState()` — HMAC-SHA256 signed OAuth state tokens with nonce + expiry.
+  - [`lib/supabase/admin.js`](./lib/supabase/admin.js): `createSupabaseAdmin()` — service-role Supabase client, used only in server-side routes.
+  - [`lib/gmail/readOtpFromGmail.js`](./lib/gmail/readOtpFromGmail.js): `readOtpFromGmail(profileId)` — decrypts stored refresh token, queries Gmail API (`from:portgasdiscordace@gmail.com after:<10min>`), decodes MIME body, extracts 6-digit OTP with regex. Throws on all failures; retry/sleep lives at the workflow step level.
+
+---
+
+### Telegram Webhook Setup & Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Student
+    participant App as React Native App
+    participant TG as Telegram Bot
+    participant Webhook as /api/telegram/webhook
+    participant DB as Supabase (profiles)
+
+    User->>App: Taps "Link Telegram" button
+    App->>TG: Opens https://t.me/<BOT>?start=<USER_ID>
+    User->>TG: Taps "START"
+    TG->>Webhook: POST Update with message "/start <USER_ID>"
+    Webhook->>DB: UPDATE profiles SET telegram_chat_id = chat_id WHERE id = USER_ID
+    Webhook->>TG: sendTelegramMessage(chat_id, "Telegram linked!")
+    DB-->>App: Supabase Realtime notifies app (status updates to "Linked ✓")
+```
+
+#### Setting Up the Telegram Webhook
+1. Create a bot using [@BotFather](https://t.me/BotFather) and copy the HTTP API token into `TELEGRAM_BOT_TOKEN`.
+2. Register the webhook with Telegram by visiting:
+   ```bash
+   https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://<YOUR_DEPLOYMENT_URL>/api/telegram/webhook
+   ```
+3. Test bot connectivity using the standalone test script:
+   ```bash
+   node test-telegram.js <YOUR_TELEGRAM_CHAT_ID> <TELEGRAM_BOT_TOKEN>
+   ```
+
+### 3. Frontend React Native app (`src/frontend/`)
+
+- Built as a self-contained sub-project with its own `package.json` and Expo dependencies.
+- [`src/frontend/config.js`](./src/frontend/config.js) & [`src/frontend/utils/supabase.js`](./src/frontend/utils/supabase.js): Dynamically resolves API endpoints and Supabase configuration.
+- [`src/frontend/screens/AuthScreen.js`](./src/frontend/screens/AuthScreen.js): Email & password authentication view for Supabase session management.
+- [`src/frontend/screens/OnboardingScreen.js`](./src/frontend/screens/OnboardingScreen.js):
+  - Full 20-field onboarding form with client-side PDF picker and direct upload to Supabase Storage.
+  - Isolated submit error handling (`submitError` state) preventing premature error messages on mount.
+  - Deep linking to Telegram with current `userId` parameter (`https://t.me/<bot>?start=<userId>`).
+  - Supabase Realtime subscription on `public:profiles` (`id=eq.${userId}`) + interval polling to instantly reflect "Telegram linked ✓" status when `/start` is received.
+  - Unconditional Gmail OAuth trigger, read-only recap state with "Edit Profile" and "Create New Profile" buttons (supporting session sign-out and form reset without page reload).
+
+### 4. Agent rules (`.agents/rules/`)
 
 Four scoped rule files govern each area of the codebase:
 
@@ -79,31 +142,26 @@ Four scoped rule files govern each area of the codebase:
 | [`bot_playwright.md`](./.agents/rules/bot_playwright.md) | `bot/**, workflows/steps/**` | `playwright-core` + `@sparticuz/chromium` only; Quick Apply preferred; always "Upload new"; 300/day cap checked per action |
 | [`workflows.md`](./.agents/rules/workflows.md) | `workflows/**, api/bot/**` | `'use workflow'` / `'use step'` only; no bare polling loops; long waits are workflow-level pauses; every branch ends at `safeExit` |
 
-### RLS checkpoint test (`1test.js`)
-
-Quick smoke test confirming cross-user reads return an empty array (not leaked data):
-
-```bash
-node 1test.js
-```
-
-Requires `.env.development.local` with `SUPABASE_URL` and `SUPABASE_ANON_KEY` set, and two seeded test users in the project's Supabase instance.
-
 ---
 
 ## Environment variables
 
+All environment variables are loaded from `.env.development.local` (or Vercel project settings):
+
 | Variable | Used by | Notes |
 |---|---|---|
-| `SUPABASE_URL` | All API routes, RLS test | Public project URL |
-| `SUPABASE_ANON_KEY` | App & API routes | Client role; enforced by RLS |
-| `SUPABASE_SERVICE_ROLE_KEY` | OAuth callback, Telegram webhook, cron | Never exposed to client |
-| `TELEGRAM_BOT_TOKEN` | Telegram webhook | App-level secret; per-user linkage via `chat_id` only |
+| `SUPABASE_URL` | All API routes, App, RLS test | Public project URL |
+| `SUPABASE_ANON_KEY` | API routes & RLS test | Client role; enforced by RLS |
+| `SUPABASE_PUBLISHABLE_KEY` | React Native frontend client | Client publishable key |
+| `SUPABASE_SERVICE_ROLE_KEY` | OAuth callback, Telegram webhook | Service role; never exposed to client |
+| `TELEGRAM_BOT_TOKEN` | Telegram webhook | App-level bot token |
+| `TELEGRAM_BOT_USERNAME` | App deep linking | Bot username (`simpleclickonetimeusetestbot`) |
 | `GOOGLE_OAUTH_CLIENT_ID` | Gmail OAuth start/callback | Google Cloud project, Testing status |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Gmail OAuth callback | Never returned to client |
+| `ENCRYPTION_KEY` | Gmail OAuth token encryption (legacy name) | 32-byte hex string for AES-256-GCM; superseded by `GMAIL_TOKEN_ENC_KEY` |
+| `GMAIL_TOKEN_ENC_KEY` | Gmail OAuth token encryption (Phase A4) | 32-byte hex AES-256-GCM key; `tokenCipher.js` checks this first, falls back to `ENCRYPTION_KEY` |
+| `OAUTH_STATE_SECRET` | OAuth CSRF state signing (Phase A4) | 32-byte hex HMAC-SHA256 key; signs/verifies the `state` param in the Gmail OAuth flow |
 | `RESEND_API_KEY` | Daily report (Phase 6) | Not yet wired |
-
-Store all secrets in Vercel environment variables; never commit plaintext credentials.
 
 ---
 
@@ -118,10 +176,9 @@ Store all secrets in Vercel environment variables; never commit plaintext creden
 
 ---
 
-## What's next (Phase 1 remainder → Phase 2)
+## Next Steps (Phase 2)
 
-- `/api/onboarding` — writes `profiles` row + uploads resume to Supabase Storage.
-- `/api/telegram/webhook` — captures `chat_id` on "start" deep-link event.
-- `/api/oauth/gmail/start` + `/api/oauth/gmail/callback` — per-user Gmail readonly consent + encrypted token storage.
-- React Native onboarding screen — all fields from `04-ui-ux.md`, Telegram link button, conditional Gmail OAuth button.
-- Phase 2: `handshakeBotWorkflow` skeleton, `createAccount` step, `otpLogin` step.
+- `handshakeBotWorkflow` orchestration setup with Vercel Workflows (`'use workflow'` / `'use step'`).
+- Implementation of `createAccount` flow (new Handshake user creation).
+- Implementation of `otpLogin` flow (existing Handshake user login via Gmail readonly OTP extraction).
+- Step checkpoint verification using `bot/src/fixtures/profile.js`.
