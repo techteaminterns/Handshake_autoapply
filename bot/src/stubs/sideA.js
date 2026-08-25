@@ -45,7 +45,10 @@ async function pauseAndRequestAnswer(profileId, questionText) {
 async function pauseForLiveHandoff(runId, contextLabel) {
   // TODO (B6): replace with workflow-level pause + live handoff signal
   console.log(`[STUB] Would pause for live handoff: ${contextLabel}`);
-  return true;
+  console.log(`[STUB] Waiting 10 seconds to simulate human intervention...`);
+  await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+  console.log(`[STUB] Human intervention completed for: ${contextLabel}`);
+  return true; // pretend user completed it instantly
 }
 
 /**
