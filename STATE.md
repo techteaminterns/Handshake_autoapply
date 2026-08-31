@@ -1,17 +1,18 @@
 # STATE.md
 
 ## Current Phase
-- Phase V1-A2 — Extend onboarding screen + API (Side A)
+- Phase V1-A4 — Telegram job confirmation (Side A) [DONE]
 
 ## Completed Phases
 - MVP done
 - Phase V1-A1 — Schema migration + profile extension (Side A)
+- Phase V1-A4 — Telegram job confirmation state machine & matching design (Side A)
 
 ## Current Blockers
 - None
 
 ## Last Commit Summary
-- V1-A1: add V1 schema migrations (handshake_jobs, applications, application_events, interventions, browser_profiles), claim_next_job RPC, status transition trigger, RLS, and handshake_password_enc column isolation
+- V1-A4: implement Telegram job confirmation state machine, handshake_jobs prompt timestamps migration (`20260831000003_telegram_job_confirmation.sql`), atomic `resolve_job_confirmation` RPC, `lib/telegram/jobConfirmation.js` (send, advance queue, resolve), webhook reply handler with yes/no parsing, and A4 test harness covering yes/no/duplicate/ignore matrix.
 
 ## Next Action
-- Phase V1-A2 Plan mode: draft onboarding fields and API changes for has_existing_handshake_account, handshake_email, handshake_password_enc per `04-ui-ux.md` and `05-backend-schema.md`.
+- Phase V1-A5 Plan mode: draft `sideA.js` interface functions (`getProfile`, `getResumeUrl`, `claimNextJob`, `markJobStatus`, `createIntervention`, `resolveIntervention`, `storeJobsFromScrape`, `checkAndIncrementActionCount`) per `05-backend-schema.md` and `06-implementation.md`.
