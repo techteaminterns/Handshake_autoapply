@@ -1,8 +1,13 @@
 const { chromium: playwright } = require('playwright-core');
 
-async function launchBrowser(headless = true) {
+async function launchBrowser(headlessOverride) {
+  const headless = process.env.HEADLESS !== 'false' ? true : false;
+  const isHeadless = typeof headlessOverride === 'boolean' && process.env.HEADLESS === undefined
+    ? headlessOverride
+    : headless;
+
   const browser = await playwright.launch({
-    headless: headless,
+    headless: isHeadless,
     args: [
       '--disable-gpu',
       '--disable-dev-shm-usage',

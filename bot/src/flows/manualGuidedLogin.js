@@ -1,7 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const { launchBrowser } = require('../browser/launch');
 const { safeExit } = require('../safeExit');
 const { createObjectCsvWriter } = require('csv-writer');
 const defaultProfile = require('../fixtures/profile');
+const { promptOtp } = require('../promptOtp');
 
 // ---------- Onboarding Autofill Function ----------
 async function runOnboardingAutofill(page, profile, runId, userData) {
@@ -562,50 +565,37 @@ async function runOnboardingAutofill(page, profile, runId, userData) {
     }
   }
   
-  // Wait for resume upload (manual action)
-  console.log(`\n[RESUME] Waiting for manual resume upload...`);
-  console.log(`[RESUME] Please upload your resume. Bot will wait up to 5 minutes...`);
-  
-  const resumeUploadStart = Date.now();
-  const resumeUploadTimeout = 5 * 60 * 1000;
-  
-  while (Date.now() - resumeUploadStart < resumeUploadTimeout) {
-    if (!(await isPageValid())) break;
-    
-    const hasFile = await page.evaluate(() => {
-      const fileInput = document.querySelector('input[type="file"]');
-      return fileInput && fileInput.files && fileInput.files.length > 0;
-    }).catch(() => false);
-    
-    if (hasFile) {
-      console.log(`[RESUME] ✅ Resume upload detected`);
-      console.log(`[RESUME] Waiting 2 seconds for UI to stabilize...`);
-      await page.waitForTimeout(2000);
-      
-      // Auto-submit after resume upload
-      console.log(`[SUBMIT] Auto-submitting after resume upload...`);
-      const submitButton = page.locator('button:has-text("Next"), button:has-text("Continue"), button:has-text("Submit"), button[type="submit"]').first();
-      if (await submitButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await submitButton.click();
-        console.log(`[SUBMIT] ✅ Submit button clicked automatically after resume upload`);
-        await page.waitForTimeout(3000);
-      } else {
-        console.log(`[SUBMIT] ⚠️ Submit button not found after resume upload`);
-      }
-      break;
-    }
-    
-    await page.waitForTimeout(2000);
+  // 1. Resume File Upload (input[data-testid="resume-field-file-input"])
+  const resumePath = profile.resumePath || path.resolve(__dirname, '../../test-resume.pdf');
+  if (!fs.existsSync(resumePath)) {
+    const minPdf =
+      '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj ' +
+      '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj ' +
+      '3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\n' +
+      'xref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n' +
+      '0000000058 00000 n\n0000000115 00000 n\n' +
+      'trailer<</Size 4/Root 1 0 R>>\nstartxref\n217\n%%EOF';
+    fs.writeFileSync(resumePath, minPdf);
   }
-  
-  if (Date.now() - resumeUploadStart >= resumeUploadTimeout) {
-    console.log(`[RESUME] ⚠️ Resume upload timeout. Attempting to submit anyway...`);
-    const submitButton = page.locator('button:has-text("Next"), button:has-text("Continue"), button:has-text("Submit"), button[type="submit"]').first();
-    if (await submitButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await submitButton.click();
-      console.log(`[SUBMIT] ✅ Submit button clicked after timeout`);
-      await page.waitForTimeout(3000);
-    }
+  try {
+    const resumeInput = page.locator('input[data-testid="resume-field-file-input"], input[type="file"]').first();
+    await resumeInput.waitFor({ state: 'attached', timeout: 5000 });
+    await resumeInput.setInputFiles(resumePath);
+    console.log(`✅ Uploaded resume file: ${path.basename(resumePath)}`);
+    await page.waitForTimeout(2000);
+  } catch (e) {
+    console.log('⚠️  Resume file input not found or upload skipped:', e.message);
+  }
+
+  // Auto-submit after resume upload
+  console.log(`[SUBMIT] Auto-submitting after resume upload...`);
+  const submitButton = page.locator('button[data-testid="expertise-step-next"], button:has-text("Next"), button:has-text("Continue"), button:has-text("Submit"), button[type="submit"]').first();
+  if (await submitButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await submitButton.click();
+    console.log(`[SUBMIT] ✅ Submit button clicked automatically after resume upload`);
+    await page.waitForTimeout(3000);
+  } else {
+    console.log(`[SUBMIT] ⚠️ Submit button not found after resume upload`);
   }
   
   // Save to CSV
@@ -657,8 +647,6 @@ async function runOnboardingAutofill(page, profile, runId, userData) {
 }
 
 // ---------- State Persistence Functions ----------
-const fs = require('fs');
-const path = require('path');
 const STATE_FILE = path.join(__dirname, '../../bot-state.json');
 
 // Save current state to file
@@ -886,15 +874,20 @@ async function waitForAllFieldsFilled(page, selectors, timeoutMs = 5 * 60 * 1000
 }
 
 // ---- main flow ----
-async function runManualGuidedLogin(runId, profile = defaultProfile) {
+async function runManualGuidedLogin(runId, profile = defaultProfile, existingPage = null) {
   // Clear any stale file state for fresh run
   clearState();
 
-  const browser = await launchBrowser(false); // non-headless to bypass Cloudflare
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  });
-  const page = await context.newPage();
+  let browser = null;
+  let page = existingPage;
+
+  if (!page) {
+    browser = await launchBrowser();
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
+    page = await context.newPage();
+  }
 
   page.on('domcontentloaded', async () => {
     console.log('🔄 Page loaded/reloaded. Current URL:', page.url());
@@ -992,120 +985,34 @@ async function runManualGuidedLogin(runId, profile = defaultProfile) {
     // Wait for navigation to OTP page
     await page.waitForTimeout(3000);
 
-    // STEP 4 — wait for human to type the EMAIL verification code
-    console.log('\n===============================================================');
-    console.log('🔔 [ACTION REQUIRED] Please enter the EMAIL verification code in the browser.');
-    console.log('   The bot is listening and will AUTO-SUBMIT as soon as you type it.');
-    console.log('===============================================================\n');
-    
-    const emailPasscodeSelectors = [
-      'input[name="passcode"]',
-      'input[name="code"]',
-      'input[name="otp"]',
-      'input[name*="passcode" i]',
-      'input[autocomplete="one-time-code"]',
-      'input[placeholder*="code" i]'
-    ];
-    
-    let code = '';
-    let attempts = 0;
-    const maxAttempts = 600; // 5 minutes with 500ms intervals
-    
-    while (attempts < maxAttempts && !code) {
-      attempts++;
-      for (const sel of emailPasscodeSelectors) {
-        try {
-          const val = await page.locator(sel).first().inputValue().catch(() => '');
-          if (val && val.trim().length === 6 && /^\d+$/.test(val.trim())) {
-            console.log(`📱 Code detected: ${val}`);
-            // Instant detection without debounce
-            code = val;
-            console.log(`✅ Instant Email OTP confirmed: ${code}`);
-            break;
-          }
-        } catch (e) {}
-      }
-      if (!code) await page.waitForTimeout(500);
-    }
-    
-    if (!code) {
-      throw new Error('❌ No verification code entered within timeout.');
-    }
+    // STEP 4 — prompt operator in terminal for the EMAIL verification code
+    console.log('STEP 4: Prompting for email verification code in terminal...');
+    const code = await promptOtp('Enter OTP: ');
+    console.log(`✅ Email OTP entered: ${code}`);
 
-    // STEP 5 — bot auto-clicks verify
-    console.log('STEP 5: Code detected. Auto-clicking Verify...');
+    // STEP 5 — bot injects code and auto-clicks verify
+    console.log('STEP 5: Injecting code into passcode field and auto-clicking Verify...');
+    const emailPasscodeSelectors = 'input[name="passcode"], input[name="code"], input[name="otp"], input[autocomplete="one-time-code"], input[placeholder*="code" i]';
+    await page.locator(emailPasscodeSelectors).first().fill(code);
+    await page.waitForTimeout(1000);
     await page.click('button:has-text("Verify")');
     await page.waitForTimeout(5000);
     saveState(runId, 5, { email });
-    
-    // Check for verification error
-    console.log('STEP 5b: Checking if verification succeeded...');
-    const verificationError = await page.locator('text=incorrect, text=invalid, text=wrong, text=error, text=expired').count() > 0;
-    const stillOnOtpPage = page.url().includes('submit-otp') || page.url().includes('passcode');
-    
-    if (verificationError || stillOnOtpPage) {
-      console.log('❌ Verification failed or wrong code. Waiting for correct code...');
-      console.log('⚠️  Please enter the correct verification code.');
-      
-      // Wait for correct code
-      let correctCode = '';
-      let retryAttempts = 0;
-      const maxRetries = 30; // 1 minute with 2-second intervals
-      
-      while (retryAttempts < maxRetries && !correctCode) {
-        retryAttempts++;
-        const newValue = await page.locator('input[name="passcode"]').inputValue().catch(() => '');
-        
-        if (newValue && newValue.trim().length === 6 && /^\d+$/.test(newValue.trim()) && newValue !== code) {
-          console.log(`📱 New code entered: ${newValue}`);
-          correctCode = newValue;
-          console.log(`✅ New instant code: ${correctCode}`);
-        }
-        
-        if (!correctCode) {
-          await page.waitForTimeout(500);
-        }
 
-      }
-      
-      if (correctCode) {
-        console.log('STEP 5c: Auto-clicking Verify with new code...');
-        await page.click('button:has-text("Verify")');
-        await page.waitForTimeout(5000);
-        
-        // Final verification check
-        const finalError = await page.locator('text=incorrect, text=invalid, text=wrong, text=error').count() > 0;
-        const stillFailed = page.url().includes('submit-otp') || page.url().includes('passcode');
-        
-        if (finalError || stillFailed) {
-          console.log('❌ Verification still failed. Please check your code and try again.');
-          throw new Error('Verification failed after retry. Please check your verification code.');
-        } else {
-          console.log('✅ Verification successful!');
-        }
-      } else {
-        throw new Error('No correct code entered within timeout. Please check your verification code.');
-      }
-    } else {
-      console.log('✅ Verification successful!');
-    }
-
-    // Check if we skipped to onboarding
+    // Check if we moved away from the access/OTP screen or reached onboarding
     await page.waitForTimeout(2000);
     const postEmailUrl = page.url();
     console.log('Current URL after Email OTP:', postEmailUrl);
-    
+
+    const otpInputSelectors = 'input[name="passcode"], input[name="code"], input[name="otp"], input[autocomplete="one-time-code"]';
+    const otpStillPresent = await page.locator(otpInputSelectors).first().isVisible({ timeout: 1000 }).catch(() => false);
+    const onboardingFieldSelector = 'input[name="first_name"], input[placeholder*="first" i], select[name="field"], select[name="background"], input[name="school"]';
+    const onboardingFieldsVisible = await page.locator(onboardingFieldSelector).first().isVisible({ timeout: 1500 }).catch(() => false);
+
     let skippedToOnboarding = false;
-    if (postEmailUrl.includes('onboarding') || postEmailUrl.includes('stu')) {
-      console.log('⏩ Skipped mobile number step. Already on onboarding/dashboard page.');
+    if (!postEmailUrl.includes('/access') || !otpStillPresent || postEmailUrl.includes('onboarding') || postEmailUrl.includes('stu') || onboardingFieldsVisible) {
+      console.log('⏩ Page moved away from access/OTP screen or reached onboarding. Skipping mobile number/SMS verification (Steps 6-7).');
       skippedToOnboarding = true;
-    } else {
-      // Check for onboarding fields
-      const fieldSelector = 'input[name="first_name"], select[name="field"], select[name="background"]';
-      if (await page.locator(fieldSelector).first().isVisible({ timeout: 2000 }).catch(() => false)) {
-         console.log('⏩ Onboarding fields detected. Skipped mobile number step.');
-         skippedToOnboarding = true;
-      }
     }
 
     const mobileSelectors = ['input[type="tel"]', 'input[name="phone"]', 'input[name="mobile"]', 'input[placeholder*="phone" i]', 'input[placeholder*="mobile" i]', 'input[name="phoneNumber"]'];
@@ -1500,6 +1407,12 @@ async function runManualGuidedLogin(runId, profile = defaultProfile) {
     } catch (e) {
       console.log('No submit button found, continuing...');
     }
+
+    // If an existingPage was provided, return user data to the caller for external flow control
+    if (existingPage) {
+      console.log('✅ Manual guided login steps completed on shared page. Returning control to caller...');
+      return { email, firstName, lastName, mobileNumber };
+    }
     
     // STEP 9 — Flow Detection and Onboarding Form Handling
     console.log('STEP 9: Detecting current flow based on URL...');
@@ -1538,8 +1451,10 @@ async function runManualGuidedLogin(runId, profile = defaultProfile) {
     });
     throw err;
   } finally {
-    await safeExit(browser);
+    if (browser) {
+      await safeExit(browser);
+    }
   }
 }
 
-module.exports = { runManualGuidedLogin };
+module.exports = { runManualGuidedLogin, runOnboardingAutofill };

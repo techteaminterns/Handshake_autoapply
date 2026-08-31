@@ -11,6 +11,9 @@ export default function DonePage() {
   const coverLetterName =
     coverLetterFile instanceof File ? coverLetterFile.name : (coverLetterFile || 'None attached');
 
+  const isMockPrefix = typeof window !== 'undefined' && window.location.pathname.startsWith('/mock-handshake');
+  const basePrefix = isMockPrefix ? '/mock-handshake' : '';
+
   return (
     <div className="job-page-wrapper" data-testid="apply-complete">
       <div className="job-sheet-card" style={{ textAlign: 'center', padding: '48px 32px' }}>
@@ -66,7 +69,7 @@ export default function DonePage() {
           type="button"
           className="btn-apply-solid"
           style={{ padding: '10px 24px' }}
-          onClick={() => navigate('/job/1')}
+          onClick={() => navigate(`${basePrefix}/job/1`)}
         >
           Back to Job Listing
         </button>

@@ -22,5 +22,20 @@ end
 $$;
 
 -- 2. Add profiles and gmail_oauth_tokens to supabase_realtime publication
-alter publication supabase_realtime add table public.profiles;
-alter publication supabase_realtime add table public.gmail_oauth_tokens;
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'profiles'
+  ) then
+    alter publication supabase_realtime add table public.profiles;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'gmail_oauth_tokens'
+  ) then
+    alter publication supabase_realtime add table public.gmail_oauth_tokens;
+  end if;
+end
+$$;
