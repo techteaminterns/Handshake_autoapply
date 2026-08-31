@@ -4,12 +4,14 @@ import { StatusBar } from 'expo-status-bar';
 import { supabase } from './utils/supabase.js';
 import AuthScreen from './screens/AuthScreen.js';
 import OnboardingScreen from './screens/OnboardingScreen.js';
+import MonitoringScreen from './screens/MonitoringScreen.js';
 
 import type { Session } from '@supabase/supabase-js';
 
 export default function App() {
     const [session, setSession] = useState<Session | null>(null);
     const [profile, setProfile] = useState<any>(null);
+    const [viewMode, setViewMode] = useState<'monitoring' | 'onboarding'>('monitoring');
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -29,6 +31,9 @@ export default function App() {
                     .maybeSingle();
                 if (isMounted) {
                     setProfile(profileData ?? null);
+                    if (!profileData) {
+                        setViewMode('onboarding');
+                    }
                 }
             } catch (err) {
                 console.warn('[App] profile fetch error:', err);
@@ -60,6 +65,7 @@ export default function App() {
                 await fetchProfile(newSession.user.id);
             } else {
                 setProfile(null);
+                setViewMode('onboarding');
             }
         });
 
@@ -69,6 +75,17 @@ export default function App() {
             authListener?.subscription?.unsubscribe();
         };
     }, []);
+
+    const handleSignOut = async () => {
+        try {
+            await supabase.auth.signOut();
+        } catch (err) {
+            console.warn('[App] signOut error:', err);
+        }
+        setSession(null);
+        setProfile(null);
+        setViewMode('onboarding');
+    };
 
     if (loading) {
         return (
@@ -84,17 +101,28 @@ export default function App() {
         <View style={styles.container}>
             <StatusBar style="auto" />
             {session ? (
-                <OnboardingScreen
-                    key={session.user.id}
-                    userId={session.user.id}
-                    accessToken={session.access_token}
-                    existingProfile={profile}
-                    onProfileSaved={(saved: any) => setProfile(saved)}
-                    onSignOut={() => {
-                        setSession(null);
-                        setProfile(null);
-                    }}
-                />
+                profile && viewMode === 'monitoring' ? (
+                    <MonitoringScreen
+                        key={session.user.id}
+                        userId={session.user.id}
+                        accessToken={session.access_token}
+                        profile={profile}
+                        onEditProfile={() => setViewMode('onboarding')}
+                        onSignOut={handleSignOut}
+                    />
+                ) : (
+                    <OnboardingScreen
+                        key={session.user.id}
+                        userId={session.user.id}
+                        accessToken={session.access_token}
+                        existingProfile={profile}
+                        onProfileSaved={(saved: any) => {
+                            setProfile(saved);
+                            setViewMode('monitoring');
+                        }}
+                        onSignOut={handleSignOut}
+                    />
+                )
             ) : (
                 <AuthScreen initialMode="signup" />
             )}
