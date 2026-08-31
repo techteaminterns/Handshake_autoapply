@@ -50,7 +50,8 @@ export default function JobDetailsPage() {
       jobId: currentJob.id,
       jobTitle: currentJob.title,
     });
-    navigate(`/apply/${currentJob.id}`);
+    const isMockPrefix = window.location.pathname.startsWith('/mock-handshake');
+    navigate(isMockPrefix ? `/mock-handshake/apply/${currentJob.id}` : `/apply/${currentJob.id}`);
   };
 
   const handleSave = () => {

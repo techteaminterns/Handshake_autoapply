@@ -5,7 +5,7 @@ const { createObjectCsvWriter } = require('csv-writer');
   console.log('=== Handshake Signup Data Capture ===');
   console.log('This script will monitor and capture all data you enter during signup.\n');
   
-  const browser = await launchBrowser(false); // non-headless to bypass Cloudflare
+  const browser = await launchBrowser();
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   });

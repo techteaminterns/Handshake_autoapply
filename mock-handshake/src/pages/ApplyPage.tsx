@@ -18,6 +18,9 @@ export default function ApplyPage() {
 
   const displayJobTitle = jobTitle || 'Sprinkle Dreams';
 
+  const isMockPrefix = typeof window !== 'undefined' && window.location.pathname.startsWith('/mock-handshake');
+  const basePrefix = isMockPrefix ? '/mock-handshake' : '';
+
   const handleResumeFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -43,7 +46,7 @@ export default function ApplyPage() {
       coverLetterFile: coverLetterFile instanceof File ? coverLetterFile.name : coverLetterFile,
     });
 
-    navigate('/done');
+    navigate(`${basePrefix}/done`);
   };
 
   const isSubmitDisabled = !resumeFile;
@@ -62,7 +65,7 @@ export default function ApplyPage() {
               type="button"
               className="btn-modal-close"
               aria-label="Close"
-              onClick={() => navigate(`/job/${jobId || 1}`)}
+              onClick={() => navigate(`${basePrefix}/job/${jobId || 1}`)}
             >
               <svg
                 width="16"

@@ -1,68 +1,94 @@
-# Workflow — Handshake Auto-Apply Bot (MVP)
+# Workflow — OneClickHandshake V1
 
 ## App Flow (high-level)
-1. User opens app → minimal onboarding form (single scroll or short multi-step).
-2. User answers all fixed fields, uploads resume, answers "existing Handshake account?".
-3. User submits Handshake job link → **bot trigger fires**.
-4. App shows bot status (running / needs you / done).
-5. If live handoff needed → app shows embedded live browser view → user acts → bot resumes.
-6. If Telegram needed → app shows "check Telegram" prompt → user replies there → bot resumes.
-7. Bot completes apply → app shows success/failure summary.
-8. (Separately, daily) → user receives report email.
+1. User opens app → auth (sign up / sign in to our platform)
+2. User completes onboarding → all fields + resume + Telegram link stored to Supabase
+3. User reaches monitoring UI → bot status visible
+4. Bot signs into Handshake (sign-up flow for new users, sign-in for existing)
+5. Bot scrapes jobs daily → sends Telegram yes/no per job
+6. User replies yes/no in Telegram
+7. Bot picks approved jobs from queue → applies sequentially
+8. Interventions (OTP, confirmation, unknown questions) surface as popups in monitoring UI
+9. User resolves popup → bot continues
+10. Monitoring UI updates live throughout
 
-## User flow per core feature
+## User Flow per Core Feature
 
-**Onboarding submission**
-1. Fill fixed fields (name, email, phone, school, major, degree, grad month/year, school-specific info, job-type/location/interest prefs, visibility, alerts).
-2. Upload resume (PDF <1MB).
-3. Link Telegram — tap deep link → starts chat with the app's single bot → webhook captures `chat_id` → stored on profile.
-4. Answer existing-Handshake-account Yes/No.
-5. Connect Gmail (readonly OAuth) — required for all users, regardless of the existing-account answer. Used for automated OTP read on the login branch (Yes); collected upfront on the signup branch (No) too, so it's already on file if a later run needs it.
-6. Submit → all fields written to Supabase.
+**Onboarding**
+1. User fills: name, email, phone, school, major, degree, grad month/year, school info, resume (PDF <1MB), job types, locations, job interests, profile visibility, job alerts toggle
+2. User taps "Link Telegram" deep link → chat starts → webhook captures chat_id
+3. User answers "Do you have a Handshake account?" Yes/No
+4. Submit → all fields written to Supabase profiles + resumes tables
+5. User lands on monitoring UI
 
-**Job link submission → bot trigger**
-1. User pastes Handshake job link.
-2. Submit → `handshakeBotWorkflow` starts with the stored onboarding profile + job link.
+**Handshake sign-up (has_existing_handshake_account = false)**
+1. Bot opens Handshake signup, fills fields from stored profile
+2. Bot sets a custom password (stored encrypted in DB)
+3. Handshake sends confirmation email → bot creates AUTH_EMAIL_CONFIRM intervention → popup appears in monitoring UI
+4. User confirms email in their inbox → taps "Done" in popup
+5. Bot detects confirmation → continues
+6. Handshake prompts phone verification → bot enters phone number → sends OTP → creates OTP intervention → popup appears
+7. User enters OTP in popup → bot fills field → continues
+8. Bot completes remaining Handshake onboarding screens using stored profile data
+9. Bot reaches Handshake home → sign-up complete
 
-**Authenticate step**
-- If **No** (no existing account): bot opens Handshake signup, fills fields from stored profile in order, reaches network-connections prompt → selects **"Maybe later"**, continues to email verification → **pauses, live handoff** → user logs in / verifies in the embedded view → bot detects completion → resumes → finishes remaining onboarding screens in Handshake using stored answers → **safely exits** the signup portion.
-- If **Yes** (existing account): bot triggers Handshake login → Handshake sends OTP to student email → bot reads OTP via readonly Gmail API automation → completes login → no live handoff needed for this branch.
+**Handshake sign-in (has_existing_handshake_account = true)**
+1. Bot opens Handshake login, enters email
+2. Handshake sends OTP to student email → bot creates OTP intervention → popup appears in monitoring UI
+3. User enters OTP in popup → bot fills field → logs in
+4. Session stored in browser profile
 
-**Apply step**
-1. Bot opens the submitted job link.
-2. Detect Quick Apply / Apply availability → if both present, **always choose Quick Apply**.
-3. Reach document selection → **always choose "Upload new"** → attach resume from Supabase.
-4. For each application question:
-   - Check Supabase reusable-answers store first.
-   - If found → auto-fill.
-   - If not found → pause, send Telegram request to user → on reply, store answer in Supabase, fill, continue.
-5. Same pattern for any additional requested document (<1MB) not already in Supabase.
-6. Submit application.
-7. **Safely exit** the browser session.
+**Session health check (every 30 mins)**
+1. Worker triggers `checkSessionHealth`
+2. If logged in → no action
+3. If not logged in → create AUTH intervention → popup in monitoring UI → user resolves → bot re-runs sign-in
 
-**Daily report**
-1. Cron fires once daily.
-2. Query Supabase for the day's applications + any status changes on prior ones.
-3. Send summary email via Resend.
+**Daily job scrape**
+1. Worker triggers `runScrape` with profile preferences (job types, locations, interests)
+2. Bot scrapes Handshake jobs page filtered by preferences
+3. New jobs stored to `handshake_jobs` (deduplicated by URL)
+4. For each new job: worker sends Telegram message "Do you want to apply to [title] at [company]? [url]"
+5. User replies yes → application row created as APPROVED+QUEUED
+6. User replies no → application row created as REJECTED (permanent)
 
-## Mock Handshake test site
-- **Purpose:** exercise the bot's signup/login/apply flows without needing a real Handshake account or a real student email inbox.
-- **Hosted at:** `/mock-handshake` routes on the same Vercel deployment as the app/API.
-- **Signup flow pages:** email entry → school dropdown → SSO/set password (this is the page where **live handoff** triggers, mirroring the real Handshake email-verification pause point) → onboarding questions → done.
-- **Apply flow:** a mock job page with Quick Apply/Apply buttons, document upload, and screening questions.
-- **OTP testing:** OTP emails for the login branch are sent from `portgasdiscordace@gmail.com`, so `readOtpFromGmail` can be tested end-to-end against a real inbox without touching real Handshake.
-- **DOM parity requirement:** selectors on every mock page must mirror real Handshake's DOM exactly, so Side B's bot code runs unmodified against both the mock site and real Handshake.
+**Apply flow**
+1. Worker calls `claimNextJob` → atomically claims one APPROVED+QUEUED application
+2. Bot opens job URL
+3. Detects Quick Apply vs Apply → always prefers Quick Apply if both present
+4. Document upload: always "Upload new" → attaches resume from Supabase Storage URL
+5. For each form question:
+   - Check profile data first → auto-fill if matched
+   - If unknown → create UNKNOWN_QUESTION intervention → popup in monitoring UI → user answers → bot fills → answer stored for reuse
+6. Review step → submit
+7. Bot checks DOM for success confirmation
+8. If confirmed → mark SUBMITTED
+9. If uncertain → mark FAILED (never assume success)
+10. `safeExit` → worker claims next job
 
-## System/data flow
-- Onboarding submit → Supabase write (profile, resume URL) → no bot trigger yet.
-- Job link submit → Vercel API → starts `handshakeBotWorkflow` (Vercel Workflow) → Playwright step runs in a Vercel Function → workflow persists state between steps → resumes on hook (live-handoff signal, Telegram reply, or OTP-read completion) → final step writes application record to Supabase → app polls/subscribes to status.
+**Intervention popup flow (monitoring UI)**
+1. Supabase Realtime fires on new OPEN intervention row
+2. Monitoring UI renders popup with: type label, question text, input field or confirm button
+3. User submits answer → API writes answer to interventions row, sets status RESOLVED
+4. Side B's `resolveIntervention` poll returns → bot continues
 
-## Edge cases & error states
-- Resume missing or >1MB at onboarding → block submission, inline error.
-- Job link malformed/not a Handshake URL → block trigger, inline error.
-- Live handoff timeout (user never returns) → workflow stays paused (no cost while paused); surface "waiting on you" state indefinitely, no auto-cancel this phase.
-- Telegram reply timeout → same: workflow stays paused, no auto-cancel this phase.
-- OTP not received/expired → pause, fall back to live handoff for manual login.
-- Neither Quick Apply nor Apply available (e.g. external application) → mark run failed, notify user, safely exit — no automation for external ATS this phase.
-- Handshake selector/DOM mismatch mid-run → fail the run, log the step, safely exit — no retry-with-different-selector logic this phase.
-- Daily action count hits 300 → halt further bot actions until next day, log the halt reason.
+## System/Data Flow
+
+- Onboarding submit → `/api/onboarding` → Supabase profiles + resumes upsert
+- Telegram /start → `/api/telegram/webhook` → profiles.telegram_chat_id update
+- Worker 30min tick → `checkSessionHealth()` (Side B) → if false → `createIntervention()` (Side A)
+- Worker daily tick → `runScrape()` (Side B) → `storeJobsFromScrape()` (Side A) → Telegram send per new job
+- Telegram reply → `/api/telegram/webhook` → match to pending job → create/update application row
+- Worker apply loop → `claimNextJob()` → `runApplyToJob()` (Side B) → `createIntervention()` as needed → `markJobStatus()` on completion
+- Monitoring UI → Supabase Realtime subscription on interventions + applications → live updates
+
+## Edge Cases & Error States
+
+- Resume missing or >1MB → block onboarding submission, inline error
+- Handshake DOM changed → safeExit, mark FAILED, log selector context
+- Quick Apply not present and Apply not present (external ATS) → mark FAILED with reason `no_apply_option`
+- Job already applied → mark ALREADY_APPLIED, do not resubmit
+- Intervention not resolved within session → worker pauses that job, moves to next if browser state clean
+- Session health check fails repeatedly → create intervention, halt apply loop until resolved
+- Telegram reply arrives with no matching pending job → ignore silently, log
+- Scrape returns zero jobs → log, no intervention needed, retry next daily cycle
+- Rate limit (300 actions/day) hit → halt worker, log halt reason

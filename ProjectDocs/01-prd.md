@@ -1,52 +1,60 @@
-# PRD — Handshake Auto-Apply Bot (MVP)
+# PRD — OneClickHandshake V1
 
 ## Problem Statement
-Students on Handshake-eligible campuses manually re-enter the same profile data across job platforms and repeat the same clicks (quick apply, document selection, screening questions) for every job. This MVP proves that a browser-automation bot, seeded from a short in-app onboarding form, can authenticate to Handshake and submit a job application on the user's behalf without live supervision.
+Students manually apply to jobs repeatedly across platforms. This V1 proves a bot can scrape Handshake jobs matching user preferences, ask for confirmation via Telegram, and apply automatically — with the user only intervening for OTPs and confirmations through a monitoring UI.
 
 ## Target Users
-- Students who have a Handshake account (or are eligible to create one) and want to test automated applying via a single job link.
-- Internal team (this internship): validating the bot mechanics before building the full app around it.
+- Students with or without an existing Handshake account
+- Internal test user (Sato) until student email is obtained
 
 ## Goals / Non-Goals
 
 **Goals**
-- Prove Supabase-collected onboarding answers can drive a real Handshake signup/login.
-- Prove the bot can complete a full apply flow (quick apply or apply) on one submitted job link.
-- Prove the human-in-the-loop fallback (live handoff, Telegram) works end-to-end at least once each.
+- Bot signs into Handshake using stored credentials; handles sign-up for new users
+- Bot scrapes jobs daily filtered by user preferences
+- User confirms each job via Telegram before bot applies
+- Bot applies sequentially, one job at a time
+- User handles OTPs and email confirmations via popup in monitoring UI
+- Monitoring UI in RN app shows bot status, job queue, intervention popups
 
-**Non-Goals (this phase)**
-- Full React Native onboarding UI/UX polish — minimal screens only.
-- Job discovery/scraping from Handshake — out of scope for the entire build; only the manually-submitted job link is used.
-- Multi-job or batch applying — one job link, one apply run.
-- n8n or any external orchestration tool — Vercel Workflows only.
-- Partnered-college eligibility gating — deferred; MVP triggers the bot unconditionally after onboarding.
+**Non-Goals**
+- Multi-user / multi-candidate (V1 = one test user)
+- Parallel job applications
+- Resume tailoring per job
+- Daily report emails
+- Vercel Workflows (last phase only, may slip to V2)
+- Browserless.io (local Playwright only for V1)
+- Gmail OAuth
+- Live handoff embed
 
 ## Core Features
 
 | Feature | Description | Priority |
 |---|---|---|
-| Minimal onboarding form | Collects the fixed field set (below) into Supabase | P0 |
-| Resume upload | PDF <1MB → Supabase Storage, linked to user | P0 |
-| Telegram account linking | User connects to the single app-level Telegram bot; `chat_id` stored against profile | P0 |
-| Gmail OAuth consent (readonly) | Shown to all users regardless of existing-account answer; per-user OAuth, not a password | P0 |
-| Handshake auth automation | Branch: new account creation (No) vs OTP login (Yes) | P0 |
-| Job-link-triggered apply run | Submitting the Handshake job link kicks off the full bot workflow | P0 |
-| Quick Apply / Apply logic | Prefer Quick Apply when both are present; else Apply | P0 |
-| Document upload via "Upload new" | Always attaches the Supabase-stored resume, never picks an existing dropdown entry | P0 |
-| Dynamic Q&A capture | Unanswered application questions/documents → Telegram request → stored in Supabase for reuse | P0 |
-| Live handoff | Embedded live browser view for unhandled/blocking steps (e.g. email verification) | P0 |
-| Read-only OTP automation | Gmail API (readonly scope) reads Handshake OTP for existing-account login | P0 |
-| Safe exit | Bot cleanly ends session after signup/apply completes | P0 |
-| Daily report email | Jobs applied count + prior-application updates, via Resend | P1 |
+| Extended onboarding | Collect all user prefs + Handshake account status, store to DB | P0 |
+| Telegram linking | Link user's Telegram chat_id on onboarding | P0 |
+| Handshake sign-in | Bot signs in using stored profile; OTP via monitoring UI popup | P0 |
+| Handshake sign-up | Bot creates account for new users; email confirm + phone OTP via popup | P0 |
+| Daily job scrape | Bot scrapes Handshake once/day filtered by user preferences | P0 |
+| Session health check | Every 30 mins, verify bot is still logged into Handshake | P0 |
+| Telegram job confirmation | Bot sends job to user via Telegram; yes → apply, no → permanent reject | P0 |
+| Sequential apply | Quick Apply preferred; resume from Supabase; unknown questions → NEEDS_INPUT | P0 |
+| Submission verification | SUBMITTED written only after positive DOM confirmation | P0 |
+| Monitoring UI | RN screen: bot status, job queue, OTP popups, intervention handling | P0 |
+| Duplicate protection | Same user/job pair cannot be applied to twice | P0 |
+| Vercel Workflows migration | Migrate local worker to durable cloud execution | P3 (last phase, may slip to V2) |
 
 ## Success Metrics
-- **Leading:** one full signup-or-login run completes without an unrecoverable error; one full apply run submits successfully on a real job link.
-- **Leading:** at least one live-handoff pause/resume and one Telegram fallback exchange complete successfully during testing.
-- **Lagging:** stored answers/documents are reused automatically on a second application without re-prompting the user.
+- **Leading:** bot completes sign-in and applies to one real Handshake job end-to-end without error
+- **Leading:** Telegram yes/no confirmation loop works; rejected jobs permanently skipped
+- **Leading:** OTP popup in monitoring UI successfully passes OTP to bot
+- **Lagging:** bot processes a daily scrape, queues jobs, and applies to confirmed ones unattended
 
 ## Constraints / Assumptions
-- Stack: React Native + Supabase (app/data), Vercel + Vercel Workflows (orchestration, TypeScript), Playwright (bot), Telegram Bot API, Gmail API (readonly), Resend (email). No paid tools beyond Cursor Pro.
-- Handshake has no public API; all interaction is browser automation and may violate Handshake's Terms of Service. Mitigation for this phase: hard rate limit of 300 actions/day. No other mitigation scoped yet.
-- `gmail.readonly` is a Google restricted scope. This phase stays in Google's "Testing" OAuth publishing status with test accounts explicitly allowlisted — no verification needed at this scale. Production rollout beyond allowlisted testers requires Google app verification + an annual CASA security assessment; not scoped this phase.
-- Deployment target: Vercel only (Hobby plan) for this phase.
-- RLS required on all Supabase tables holding personal data, credentials, or documents.
+- Stack: RN/Expo, Supabase, Vercel API routes, local Playwright, Telegram Bot API
+- No paid tools beyond Cursor Pro
+- Student email with real Handshake account needed for scraping + real sign-in testing — expected within days
+- Whether Handshake jobs page requires login to scrape is unknown until student email obtained
+- V1 = one user (Sato); multi-user architecture deferred
+- All bot orchestration runs locally (laptop on) until Vercel Workflows phase
+- Side A (Sato) owns infra/app/orchestration; Side B (teammate) owns all Playwright code

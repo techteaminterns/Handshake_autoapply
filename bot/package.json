@@ -11,7 +11,9 @@
     "test-b2": "node scripts/test-b2.js",
     "test-b3": "node scripts/test-b3.js",
     "test-manual": "node scripts/test-manual-flow.js",
-    "capture-data": "node scripts/capture-signup-data.js"
+    "capture-data": "node scripts/capture-signup-data.js",
+    "test-mock-apply": "node scripts/test-mock-apply.js",
+    "test-full-flow": "node scripts/test-full-flow.js"
   },
   "keywords": [],
   "author": "",

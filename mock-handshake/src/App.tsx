@@ -14,6 +14,10 @@ export default function App() {
           <Route path="/job/:jobId" element={<JobDetailsPage />} />
           <Route path="/apply/:jobId" element={<ApplyPage />} />
           <Route path="/done" element={<DonePage />} />
+          <Route path="/mock-handshake" element={<Navigate to="/mock-handshake/job/1" replace />} />
+          <Route path="/mock-handshake/job/:jobId" element={<JobDetailsPage />} />
+          <Route path="/mock-handshake/apply/:jobId" element={<ApplyPage />} />
+          <Route path="/mock-handshake/done" element={<DonePage />} />
           <Route path="*" element={<Navigate to="/job/1" replace />} />
         </Routes>
       </BrowserRouter>

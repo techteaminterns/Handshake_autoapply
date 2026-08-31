@@ -1,134 +1,109 @@
-# Workflow — Side A (Everything except browser automation)
+# Workflow — Side A (Everything except Playwright)
 
-**Owns:** Supabase schema/RLS, RN app, onboarding, Telegram infra, Gmail OAuth, Vercel Workflow orchestration skeleton, live handoff app-side, Bot Status, daily report.
-**Does not own:** any Playwright code, any Handshake page interaction. Side B owns that entirely — Side A only calls into it and receives status back.
+**Owns:** Supabase schema/RLS, RN app, onboarding extension, monitoring UI, Telegram infra, intervention system, Side A interface functions, local worker loop orchestration, Vercel Workflows migration (last phase).
+**Does not own:** any Playwright code, any Handshake page interaction. Side B owns that entirely.
 
 ---
 
-## Interface Contract (shared with Side B — do not change without telling them)
+## Interface Contract
 
 Functions **Side A implements, Side B calls:**
 | Function | Purpose |
 |---|---|
-| `getProfileForHandshake(profileId)` | Returns onboarding answers formatted for filling Handshake's forms |
-| `getResumeUrl(profileId)` | Supabase Storage URL for the current resume |
-| `getReusableAnswer(profileId, questionText)` | Returns a stored answer or `null` |
-| `pauseAndRequestAnswer(profileId, questionText)` | Pauses the workflow, sends a Telegram prompt, resumes with the reply, persists it to `reusable_answers` |
-| `pauseForLiveHandoff(runId, contextLabel)` | Pauses the workflow until the user signals "done" in the live-view screen |
-| `readOtpFromGmail(profileId)` | Reads the Handshake OTP via Gmail API (not Playwright) |
-| `checkAndIncrementActionCount(runId)` | Returns `false` if the 300/day cap is hit |
-| `markRunStatus(runId, status, failureReason?)` | Updates `bot_runs.status` |
+| `getProfile(profileId)` | Returns normalized profile for filling Handshake forms |
+| `getResumeUrl(profileId)` | Supabase Storage signed URL for resume |
+| `claimNextJob(profileId, workerId)` | Atomically claims next APPROVED+QUEUED application; returns row or null |
+| `markJobStatus(applicationId, status, reason?)` | Updates applications.status + writes application_event |
+| `createIntervention(profileId, type, applicationId?, questionText?, options?)` | Creates OPEN intervention row; returns interventionId |
+| `resolveIntervention(interventionId, timeoutMs?)` | Polls until RESOLVED; returns answer string |
+| `storeJobsFromScrape(profileId, jobs[])` | Upserts to handshake_jobs; deduplicates by URL; returns new job count |
+| `checkAndIncrementActionCount(profileId)` | Returns false if 300/day cap hit; else increments and returns true |
 
-Functions **Side B implements, Side A's workflow skeleton calls:**
+Functions **Side B implements, Side A's worker calls:**
 | Function | Purpose |
 |---|---|
-| `runCreateAccount(profile, runId)` | Full Handshake signup flow |
-| `runOtpLogin(profile, runId)` | Full Handshake login flow |
-| `runApplyToJob(jobLink, profileId, runId)` | Full apply flow |
-| `safeExit(browserSession)` | Closes the browser session cleanly |
+| `runSignIn(profile)` | Full Handshake sign-in flow |
+| `runSignUp(profile)` | Full Handshake sign-up + onboarding flow |
+| `checkSessionHealth(profile)` | Returns true if logged in |
+| `runScrape(profile, preferences)` | Scrapes Handshake jobs; returns normalized array |
+| `runApplyToJob(jobUrl, profile, applicationId)` | Full apply flow |
+| `safeExit(browserSession)` | Closes browser cleanly |
 
-Until the real function exists on either side, the other side builds against a stub returning fixture data — don't block on the other person.
+Until real Side B function exists, build against a stub returning fixture data.
 
-## Sync Points (coordinate with Side B at these moments)
-- **Before B1 integrates:** `getProfileForHandshake` (A6) and `getResumeUrl` (A2) must be real.
-- **Before B2 integrates:** `readOtpFromGmail` (A4) must be real — this is currently blocked on the mock Handshake site existing (see `06-implementation.md` Phase 1.5) so OTP read has something real to test against.
-- **Before B3 integrates:** `pauseAndRequestAnswer`, `getReusableAnswer`, `checkAndIncrementActionCount` (A7) must be real.
-- **Major sync — B4 "integration pass":** sit together, swap every stub for the real function, run one full end-to-end flow live.
+## Sync Points
+- **Before B1 integrates:** `getProfile` (A5) and `createIntervention`/`resolveIntervention` (A5) must be real
+- **Before B4 integrates:** `storeJobsFromScrape` (A5) must be real
+- **Before B5 integrates:** `getResumeUrl`, `checkAndIncrementActionCount` (A5) must be real
+- **Major sync — Integration pass:** sit together, swap every stub, run full flow live
 
-## Branching & PR conventions
-- Branch naming: `side-a/phaseN-<short-name>`, e.g. `side-a/phase2-onboarding`.
-- Commit at every checkpoint pass — one commit per checkpoint, not one giant commit per phase.
-- Open a PR into `main` as soon as a phase's checkpoint passes. PR description: paste the checkpoint's Given/When/Then and confirm it passes.
-- Request review from Side B before merging — even a fast pass, since your code exposes the functions their bot depends on.
-- Squash-merge, delete the branch after merge.
-- Never merge a phase whose checkpoint hasn't been self-tested.
+## Branching & PR Conventions
+- Branch naming: `side-a/v1-phase{N}-<short-name>`
+- Commit at every checkpoint pass
+- PR into `main`; paste checkpoint Given/When/Then and confirm it passes
+- Request Side B review before merging
+- Squash-merge, delete branch after merge
+- Never merge a phase whose checkpoint hasn't been self-tested
 
 ---
 
-## Phase A0 — One-time manual setup
-- **Goal:** Telegram bot and Google OAuth client exist before any code needs them.
-- **Not Antigravity CLI (agy):** message @BotFather → `/newbot` → token to Vercel env as `TELEGRAM_BOT_TOKEN`. Google Cloud Console → new project → OAuth consent screen → Testing status → allowlist your test account(s) → OAuth Client ID/secret to Vercel env.
-- **Checkpoint:** both env vars are set in Vercel; a test message can be sent through the bot token manually (e.g. via curl).
-- **Git:** commit env var documentation (not the secrets themselves) to `side-a/phase0-setup`. No PR needed — this is config, note it in the phase-A1 PR instead.
-- **Status:** ✅ complete.
+## Phase V1-A1 — Schema migration
+- **Goal:** all new V1 tables + profile alterations + RLS + atomic claim RPC in Supabase
+- **Cursor prompt order:**
+  1. Plan mode — `@05-backend-schema.md Draft migration SQL for all new V1 tables, profile alterations, indexes, status constraints, and claim_next_job RPC.`
+  2. Agent mode — apply migrations + RLS policies
+  3. Plan mode — confirm `handshake_password_enc` service-role only; confirm RPC uses FOR UPDATE SKIP LOCKED
+  4. Agent mode — fix if not
+- **Checkpoint:** RLS blocks cross-user reads on all new tables. Simultaneous claim_next_job calls: exactly one succeeds.
+- **Git:** `side-a/v1-phase1-schema`
 
-## Phase A1 — Supabase schema + RLS
-- **Model:** Claude Sonnet 4.6 Thinking (security/auth phase).
-- **Files/modules:** migrations for every table in `05-backend-schema.md`, RLS policies.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — `@05-backend-schema.md Draft the Supabase migration SQL for every table and RLS policy in this doc, verbatim.` (2) Agent mode — apply, generate policies. (3) Plan mode — `@AGENTS.md @supabase.mdc Confirm gmail_oauth_tokens blocks client-role reads.` (4) Agent mode — fix if not.
-- **Checkpoint:** Given any table with personal data, when queried as a different user's session, then RLS blocks the read.
-- **Docs automation:** confirm AGENTS.md end-of-slice rule fired.
-- **Git/PR:** branch `side-a/phase1-schema`, commit + PR at checkpoint pass.
-- **Status:** ✅ complete.
+## Phase V1-A2 — Extend onboarding
+- **Goal:** onboarding screen + API handle new Handshake account fields
+- **Cursor prompt order:**
+  1. Plan mode — `@04-ui-ux.md @05-backend-schema.md Draft new onboarding fields and API changes.`
+  2. Agent mode — extend `OnboardingScreen.js` + `/api/onboarding`
+- **Checkpoint:** Submitted form with has_existing_handshake_account=true writes both new fields; handshake_password_enc never in API response.
+- **Git:** `side-a/v1-phase2-onboarding`
 
-## Phase A2 — Onboarding screen + resume upload
-- **Model:** Gemini Flash High (moderate logic phase).
-- **Files/modules:** RN onboarding screen (all fields per `04-ui-ux.md`), `/api/onboarding`, resume upload to Storage, `getResumeUrl(profileId)`.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — `@04-ui-ux.md @01-prd.md Draft the onboarding screen field list and states.` (2) Agent mode — build screen. (3) Agent mode — build `/api/onboarding` + Storage upload + `getResumeUrl`.
-- **Checkpoint:** Given a filled form with a <1MB PDF resume, when submitted, then `profiles` + `resumes` rows exist and `getResumeUrl` returns a working URL.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase2-onboarding`, commit + PR at checkpoint pass.
-- **Status:** ✅ complete.
+## Phase V1-A3 — Monitoring UI
+- **Goal:** monitoring UI screen in RN app with live Supabase data + intervention popup
+- **Cursor prompt order:**
+  1. Plan mode — `@04-ui-ux.md Draft monitoring UI: all sections, states, popup types.`
+  2. Agent mode — build screen with mock data
+  3. Agent mode — wire Supabase Realtime subscriptions
+  4. Agent mode — build intervention popup (all 4 types) + `/api/interventions/:id/resolve`
+- **Checkpoint:** OPEN intervention row → popup appears without refresh. Resolved → popup auto-dismisses.
+- **Git:** `side-a/v1-phase3-monitoring-ui`
 
-## Phase A3 — Telegram linking infra
-- **Model:** Gemini Flash Medium (CRUD/UI phase).
-- **Files/modules:** `/api/telegram/webhook` (link-capture + a reusable send/receive utility for later reuse in A7), "Link Telegram" button + deep link.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — outline the deep-link "start" capture sequence. (2) Agent mode — build webhook capturing `chat_id` into `profiles`. (3) Agent mode — build a reusable `sendTelegramMessage(chatId, text)` / `onTelegramReply(...)` utility, kept generic — Phase A7 will call it, don't hardcode the fallback use case into it here.
-- **Checkpoint:** Given a user taps the deep link, when they start the chat, then `profiles.telegram_chat_id` is populated.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase3-telegram-infra`, commit + PR at checkpoint pass.
-- **Status:** ✅ complete.
+## Phase V1-A4 — Telegram job confirmation
+- **Goal:** new jobs trigger Telegram yes/no; replies create/update application rows
+- **Cursor prompt order:**
+  1. Plan mode — outline yes/no matching logic (one pending job per user at a time)
+  2. Agent mode — extend `/api/telegram/webhook`; build send utility; create/update application rows
+- **Checkpoint:** yes reply → QUEUED application created. no reply → REJECTED application created. Duplicate reply ignored.
+- **Git:** `side-a/v1-phase4-telegram-confirmation`
 
-## Phase A4 — Gmail OAuth + OTP read
-- **Model:** Claude Sonnet 4.6 Thinking (security/auth phase).
-- **Files/modules:** `/api/oauth/gmail/start`, `/api/oauth/gmail/callback`, `gmail_oauth_tokens` writes, `readOtpFromGmail(profileId)`. Gmail OAuth consent is now shown to and collected from every onboarding user, not only those who answer Yes to the existing-account question.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — outline OAuth redirect flow against `02-trd.md`'s restricted-scope notes. (2) Agent mode — build start/callback, encrypted token storage. (3) Agent mode — build `readOtpFromGmail` (Gmail API `messages.list`/`get`, filtered to recent Handshake senders, parse the OTP).
-- **Checkpoint:** Given a connected Gmail account and a real Handshake OTP email, when `readOtpFromGmail` is called, then it returns the correct code within a few seconds.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase4-gmail-otp`, commit + PR at checkpoint pass. **Tell Side B this PR merged — unblocks their B2 integration.**
-- **Status:** ⚠️ partial — OAuth consent (now unconditional for all users) and encrypted token storage are done and merged; the `readOtpFromGmail` step itself is postponed until the mock Handshake site (`06-implementation.md` Phase 1.5) exists, since OTP-read testing needs a real inbox and a real OTP-sending flow to run against.
+## Phase V1-A5 — Interface functions
+- **Goal:** all 8 Side A functions are real and tested in isolation
+- **Cursor prompt order:**
+  1. Plan mode — list each function, DB query, return shape
+  2. Agent mode — implement all in `sideA.js`; `resolveIntervention` polls every 2s, timeout configurable
+- **Checkpoint:** Each function returns correct shape. `claimNextJob` called twice simultaneously: one row, one null.
+- **Git:** `side-a/v1-phase5-interface-functions` — **tell Side B this merged**
 
-## Phase A5 — Workflow skeleton + bot trigger
-- **Model:** Claude Sonnet 4.6 Thinking (orchestration phase).
-- **Files/modules:** `handshakeBotWorkflow` (`'use workflow'`), branch logic on `has_existing_handshake_account`, calls to Side B's `runCreateAccount`/`runOtpLogin`/`runApplyToJob` (stubbed until Side B's phases land), `/api/bot/trigger`, `markRunStatus`.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — `@03-workflow.md @workflows.mdc Draft the workflow skeleton and branch logic.` (2) Agent mode — build skeleton with stub calls to Side B's four functions returning fixture success. (3) Agent mode — build `/api/bot/trigger` creating a `bot_runs` row and starting the workflow.
-- **Checkpoint:** Given a job-link submission, when the trigger fires, then a `bot_runs` row is created, the workflow starts, and the correct branch (create vs login) is selected based on the stored profile.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase5-workflow-skeleton`, commit + PR at checkpoint pass. **Tell Side B this PR merged — they can now wire real calls into the skeleton.**
-- **Status:** not started — the mock Handshake site (`06-implementation.md` Phase 1.5) is being built first so this phase and Side B's phases have a real target to integrate against.
+## Phase V1-A6 — Local worker loop
+- **Goal:** Node.js worker runs health check (30min), daily scrape, and sequential apply loop
+- **Cursor prompt order:**
+  1. Plan mode — `@worker.mdc Outline worker: health tick, scrape tick, apply loop with atomic claim and sequential processing.`
+  2. Agent mode — build with Side B stubs
+  3. Agent mode — wire real Side B functions after B3/B4/B5 merged
+- **Checkpoint:** Worker starts cleanly. Health check fires on interval. Apply loop processes one job at a time, does not start second until first is terminal.
+- **Git:** `side-a/v1-phase6-worker-loop`
 
-## Phase A6 — Live handoff (app-side)
-- **Model:** Gemini Flash High (moderate logic phase).
-- **Files/modules:** RN live-view screen, `/api/bot/live-handoff/resume`, `pauseForLiveHandoff(runId, contextLabel)`, `getProfileForHandshake(profileId)`.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — `@04-ui-ux.md Draft the live-handoff screen states.` (2) Agent mode — build screen + resume endpoint. (3) Agent mode — build `pauseForLiveHandoff` as a workflow hook, and `getProfileForHandshake` formatting `profiles` fields for Handshake's forms.
-- **Checkpoint:** Given a paused run at live handoff, when the user taps "I'm done," then the workflow resumes from the correct point.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase6-live-handoff`, commit + PR at checkpoint pass. **Tell Side B — unblocks real B1 integration.**
-- **Status:** not started.
-
-## Phase A7 — Telegram fallback + rate limit
-- **Model:** Gemini Flash High (moderate logic phase).
-- **Files/modules:** `pauseAndRequestAnswer(profileId, questionText)` (built on A3's send/receive utility), `getReusableAnswer`, `checkAndIncrementActionCount`.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — outline the pause/notify/resume/persist sequence. (2) Agent mode — build `pauseAndRequestAnswer` + write-through to `reusable_answers`. (3) Agent mode — build `getReusableAnswer` (checked first) and `checkAndIncrementActionCount` against `bot_runs.actions_count`.
-- **Checkpoint:** Given an unanswered question, when the fallback fires and the user replies, then the run resumes, the answer is stored, and a repeat question skips the fallback entirely.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase7-telegram-fallback`, commit + PR at checkpoint pass. **Tell Side B — unblocks real B3 integration.**
-- **Status:** not started.
-
-## Phase A8 — Bot Status screen
-- **Model:** Gemini Flash Medium (CRUD/UI phase).
-- **Files/modules:** RN Bot Status screen, subscription/poll on `bot_runs.status`.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — `@04-ui-ux.md Draft the Bot Status screen states.` (2) Agent mode — build with realtime subscription, no fixed-duration assumptions.
-- **Checkpoint:** Given a run transitions through states, when viewed live, then the screen reflects each state without a page refresh.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase8-bot-status`, commit + PR at checkpoint pass.
-- **Status:** not started.
-
-## Phase A9 — Daily report
-- **Model:** Gemini Flash Medium (CRUD/UI phase).
-- **Files/modules:** `/api/reports/daily`, Vercel Cron config, Resend integration.
-- **Antigravity CLI (agy) prompt order:** (1) Plan mode — outline report content from `01-prd.md` success metrics. (2) Agent mode — build query + send + cron config.
-- **Checkpoint:** Given at least one `bot_runs` row from today, when cron fires, then an accurate summary email arrives.
-- **Docs automation:** confirm.
-- **Git/PR:** branch `side-a/phase9-daily-report`, commit + PR at checkpoint pass.
-- **Status:** not started.
+## Phase V1-A7 — Vercel Workflows migration [may slip to V2]
+- **Goal:** replace local worker with Vercel Workflows durable execution
+- **Cursor prompt order:**
+  1. Plan mode — `@workflows.mdc Map health/scrape/apply loops to Workflow steps with sleep/hook pauses.`
+  2. Agent mode — migrate
+- **Checkpoint:** Worker loop runs on Vercel. Intervention pause/resume works without local process.
+- **Git:** `side-a/v1-phase7-vercel-workflows`
