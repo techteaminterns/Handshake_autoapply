@@ -20,7 +20,12 @@
  * - Always returns HTTP 200 to acknowledge delivery and prevent Telegram webhook retries.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { createSupabaseAdmin } from '../../lib/supabase/admin.js';
+import {
+  getPendingConfirmationJob,
+  resolvePendingConfirmation,
+  advanceConfirmationQueue,
+} from '../../lib/telegram/jobConfirmation.js';
 
 /**
  * Sends a text message to a specific Telegram chat ID.
@@ -78,21 +83,119 @@ export async function sendTelegramMessage(chatId, text, options = {}) {
 /**
  * Generic handler for incoming non-command Telegram messages and user replies.
  *
- * Purpose:
- *   Provides a decoupled module-level receiver for conversational responses. In Phase A7,
- *   this will be wired into Vercel Workflow pause/resume hooks (resolving questions asked
- *   during Handshake application runs) and persisting new answers to `reusable_answers`.
+ * Phase V1-A4 Implementation:
+ *   1. Matches sender `chatId` to a user profile via `profiles.telegram_chat_id`.
+ *   2. Finds the unconfirmed pending job prompt (`telegram_prompt_sent_at` IS NOT NULL, `resolved_at` IS NULL).
+ *   3. If no pending job exists: logs and ignores silently (03-workflow.md L92; Phase A7 extension point).
+ *   4. Normalizes user reply into 'yes' or 'no':
+ *      - Unrecognized replies prompt the user to reply YES or NO without closing the pending prompt.
+ *   5. Calls `resolvePendingConfirmation` atomic RPC to create QUEUED/REJECTED application row and resolve prompt.
+ *   6. Acknowledges user decision and automatically advances the confirmation queue to prompt the next unprompted job.
  *
  * @param {string|number} chatId - Telegram chat identifier of the sender.
  * @param {object} message - Telegram Message object containing text, attachments, etc.
  * @param {object} [update={}] - Full Telegram Update payload received by the webhook.
  * @returns {Promise<void>} Resolves when the reply processing completes.
  */
-export async function onTelegramReply(chatId, message, update = {}) {
+export async function onTelegramReply(chatId, message, update = {}, options = {}) {
   const text = (message?.text ?? '').trim();
   console.log(`[telegram/webhook] Inbound reply received from chat_id=${chatId}: "${text}"`);
 
-  // Phase A7 will wire Vercel Workflow resume hook and reusable_answers write-through here.
+  const sendFn = options.telegramSendFn || sendTelegramMessage;
+  const supabase = options.supabase || (() => {
+    try {
+      return createSupabaseAdmin();
+    } catch (err) {
+      console.error('[telegram/webhook] Failed to initialize Supabase admin client:', err.message);
+      return null;
+    }
+  })();
+
+  if (!supabase) return;
+
+  // 1. Look up profile associated with this Telegram chat ID
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, telegram_chat_id')
+    .eq('telegram_chat_id', String(chatId))
+    .maybeSingle();
+
+  if (profileError) {
+    console.error('[telegram/webhook] Profile lookup error for chat_id:', chatId, profileError.message);
+    return;
+  }
+
+  if (!profile) {
+    console.log('[telegram/webhook] Inbound reply from unlinked chat_id:', chatId);
+    return;
+  }
+
+  // 2. Look up the active unconfirmed job prompt for this profile
+  const pendingJob = await getPendingConfirmationJob(supabase, profile.id);
+
+  if (!pendingJob) {
+    // Edge case per 03-workflow.md L92: "Telegram reply arrives with no matching pending job -> ignore silently, log"
+    console.log('[telegram/webhook] Inbound reply with no pending confirmation job for profile:', profile.id);
+    // Phase A7 will wire Vercel Workflow resume hook and reusable_answers write-through here.
+    return;
+  }
+
+  // 3. Parse yes / no decision from message text
+  const normalized = text.toLowerCase();
+  const YES_REGEX = /^(yes|y|yeah|yep|👍|apply)\b/i;
+  const NO_REGEX = /^(no|n|nope|skip|👎)\b/i;
+
+  let decision = null;
+  if (YES_REGEX.test(normalized)) {
+    decision = 'yes';
+  } else if (NO_REGEX.test(normalized)) {
+    decision = 'no';
+  }
+
+  if (!decision) {
+    console.log('[telegram/webhook] Unrecognized confirmation reply from chat_id:', chatId, `"${text}"`);
+    await sendFn(
+      chatId,
+      'Please reply YES to queue this application or NO to skip.'
+    );
+    return;
+  }
+
+  // 4. Atomically resolve the pending confirmation
+  const { status, error } = await resolvePendingConfirmation(
+    profile.id,
+    pendingJob.id,
+    decision,
+    { supabase }
+  );
+
+  if (error) {
+    console.error('[telegram/webhook] Error resolving job confirmation:', error);
+    return;
+  }
+
+  if (status === 'resolved') {
+    if (decision === 'yes') {
+      await sendFn(
+        chatId,
+        `Got it! Queued application for "${pendingJob.title}".`
+      );
+    } else {
+      await sendFn(
+        chatId,
+        `Skipped "${pendingJob.title}".`
+      );
+    }
+
+    // Auto-advance confirmation queue to prompt next waiting job if any
+    await advanceConfirmationQueue(profile.id, { supabase, telegramSendFn: sendFn });
+  } else if (status === 'ignored_duplicate') {
+    console.log('[telegram/webhook] Duplicate confirmation reply ignored for job:', pendingJob.id);
+  } else if (status === 'ignored_permanent_reject') {
+    console.log('[telegram/webhook] Confirmation reply ignored (job already rejected):', pendingJob.id);
+  } else {
+    console.log('[telegram/webhook] Confirmation reply ignored with status:', status);
+  }
 }
 
 /**
@@ -148,19 +251,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    const supabaseUrl =
-      process.env.SUPABASE_URL ||
-      process.env.EXPO_PUBLIC_SUPABASE_URL ||
-      process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceRoleKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
-
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
+    let supabase;
+    try {
+      supabase = createSupabaseAdmin();
+    } catch (err) {
       console.error('[telegram/webhook] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
       return res.status(500).json({ error: 'Server configuration error' });
     }
-
-    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     // UPDATE only — never insert/upsert to avoid violating NOT NULL constraints on profiles
     const { data: updated, error: updateError } = await supabase
@@ -192,10 +289,15 @@ export default async function handler(req, res) {
       chatId,
       'Telegram linked! You will receive bot notifications and Q&A prompts here.'
     );
+
+    // Auto-advance confirmation queue in case unprompted jobs were waiting for Telegram linkage
+    await advanceConfirmationQueue(userId, { supabase });
+
     return res.status(200).json({ ok: true });
   }
 
-  // ── Handle Non-command Inbound Replies (Phase A7 Dispatcher) ───────────────
+  // ── Handle Non-command Inbound Replies (Phase A4 / A7 Dispatcher) ───────────
   await onTelegramReply(chatId, message, update);
   return res.status(200).json({ ok: true });
 }
+
