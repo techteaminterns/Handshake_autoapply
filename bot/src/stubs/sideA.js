@@ -1,84 +1,102 @@
 /**
- * sideA.js — Side A helpers called by Side B (bot) Playwright flows.
+ * bot/src/stubs/sideA.js
  *
- * readOtpFromGmail is now wired to the real implementation in
- * lib/gmail/readOtpFromGmail.js (Phase A4).
+ * Dynamic-import bridge from the CommonJS Playwright bot (bot/) to the ESM
+ * worker/sideA.js where all real Side A functions live.
  *
- * All other functions remain stubs until their respective phases:
- *   - getResumeUrl:              replace at B4
- *   - getReusableAnswer:         replace at B5 (Telegram fallback wiring)
- *   - pauseAndRequestAnswer:     replace at B5
- *   - pauseForLiveHandoff:       replace at B6 (live handoff)
- *   - checkAndIncrementActionCount: replace at B3 (rate limit wiring)
- *   - markRunStatus:             replace at B3 (bot_runs status wiring)
+ * All stubs replaced at Phase V1-A5. Side B may call any function here —
+ * the bridge loads the real implementation on first call and caches the module.
+ *
+ * Functions implemented in worker/sideA.js (real, tested):
+ *   getProfile, getResumeUrl, claimNextJob, markJobStatus,
+ *   createIntervention, resolveIntervention, storeJobsFromScrape,
+ *   checkAndIncrementActionCount
+ *
+ * readOtpFromGmail — still wired to lib/gmail/readOtpFromGmail.js (Phase A4).
+ *
+ * Phase: V1-A5
  */
 
-// readOtpFromGmail is an ES-module export — import it via dynamic import so
-// this CJS file (required by Playwright flows) can call it without converting
-// the entire bot/src tree to ESM.
+'use strict';
+
+let _sideA = null;
+
+/** @returns {Promise<typeof import('../../../worker/sideA.js')>} */
+async function loadSideA() {
+  if (!_sideA) {
+    // Resolve relative to repo root (this file is at bot/src/stubs/)
+    _sideA = await import('../../../worker/sideA.js');
+  }
+  return _sideA;
+}
+
+// readOtpFromGmail is still wired to lib/gmail — keep separate loader
 let _readOtpFromGmail = null;
 async function loadReadOtp() {
   if (!_readOtpFromGmail) {
-    // Resolve relative to the repo root (this file lives at bot/src/stubs/)
     const mod = await import('../../../lib/gmail/readOtpFromGmail.js');
     _readOtpFromGmail = mod.readOtpFromGmail;
   }
   return _readOtpFromGmail;
 }
 
+// ---------------------------------------------------------------------------
+// Bridge wrappers — forward every call to worker/sideA.js
+// ---------------------------------------------------------------------------
+
+async function getProfile(profileId) {
+  const m = await loadSideA();
+  return m.getProfile(profileId);
+}
+
 async function getResumeUrl(profileId) {
-  // TODO (B4): replace with real Supabase Storage signed URL lookup
-  return 'https://example.com/fake-resume.pdf';
+  const m = await loadSideA();
+  return m.getResumeUrl(profileId);
 }
 
-async function getReusableAnswer(profileId, questionText) {
-  // TODO (B5): replace with real reusable_answers DB lookup
-  return null; // null = "never answered before" → triggers Telegram fallback
+async function claimNextJob(profileId, workerId) {
+  const m = await loadSideA();
+  return m.claimNextJob(profileId, workerId);
 }
 
-async function pauseAndRequestAnswer(profileId, questionText) {
-  // TODO (B5): replace with workflow-level pause + Telegram message
-  console.log(`[STUB] Would pause + Telegram-ask: "${questionText}"`);
-  return 'This is a fixture answer for testing.';
+async function markJobStatus(applicationId, status, stepOrReason) {
+  const m = await loadSideA();
+  return m.markJobStatus(applicationId, status, stepOrReason);
 }
 
-async function pauseForLiveHandoff(runId, contextLabel) {
-  // TODO (B6): replace with workflow-level pause + live handoff signal
-  console.log(`[STUB] Would pause for live handoff: ${contextLabel}`);
-  console.log(`[STUB] Waiting 10 seconds to simulate human intervention...`);
-  await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-  console.log(`[STUB] Human intervention completed for: ${contextLabel}`);
-  return true; // pretend user completed it instantly
+async function createIntervention(profileId, type, applicationId, questionText, options) {
+  const m = await loadSideA();
+  return m.createIntervention(profileId, type, applicationId, questionText, options);
 }
 
-/**
- * Read the Handshake OTP from the user's Gmail inbox.
- * Phase A4: wired to the real implementation.
- *
- * @param {string} profileId  — Supabase user UUID
- * @returns {Promise<string>}  6-digit OTP code
- */
+async function resolveIntervention(interventionId, timeoutMs) {
+  const m = await loadSideA();
+  return m.resolveIntervention(interventionId, timeoutMs);
+}
+
+async function storeJobsFromScrape(profileId, jobs) {
+  const m = await loadSideA();
+  return m.storeJobsFromScrape(profileId, jobs);
+}
+
+async function checkAndIncrementActionCount(profileId) {
+  const m = await loadSideA();
+  return m.checkAndIncrementActionCount(profileId);
+}
+
 async function readOtpFromGmail(profileId) {
   const fn = await loadReadOtp();
   return fn(profileId);
 }
 
-async function checkAndIncrementActionCount(runId) {
-  // TODO (B3): replace with real bot_runs.actions_count check + increment
-  return true; // pretend under the 300/day cap
-}
-
-async function markRunStatus(runId, status, failureReason = null) {
-  // TODO (B3): replace with real bot_runs status update
-  console.log(`[STUB] bot_runs status → ${status}`, failureReason || '');
-}
-
 module.exports = {
+  getProfile,
   getResumeUrl,
-  getReusableAnswer,
-  pauseAndRequestAnswer,
-  pauseForLiveHandoff,
-  readOtpFromGmail,
+  claimNextJob,
+  markJobStatus,
+  createIntervention,
+  resolveIntervention,
+  storeJobsFromScrape,
   checkAndIncrementActionCount,
-  markRunStatus,
+  readOtpFromGmail,
 };
