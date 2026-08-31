@@ -123,6 +123,8 @@ const EMPTY_DRAFT = {
   job_interests:    '',
   profile_visibility: 'community', job_alerts_opt_in: true,
   has_existing_handshake_account: null,
+  handshake_email: '',
+  handshake_password: '',
   resume_storage_path: null, resume_file_name: null, resume_file_size_bytes: null,
 };
 
@@ -146,6 +148,8 @@ function profileToDraft(p) {
     profile_visibility: p.profile_visibility ?? 'community',
     job_alerts_opt_in:  p.job_alerts_opt_in  ?? true,
     has_existing_handshake_account: p.has_existing_handshake_account ?? null,
+    handshake_email: p.handshake_email ?? '',
+    handshake_password: '',
     resume_storage_path:  null,
     resume_file_name:     null,
     resume_file_size_bytes: null,
@@ -383,6 +387,16 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     if (!draft.grad_month)       errs.grad_month      = 'Graduation month is required.';
     if (!draft.grad_year)        errs.grad_year       = 'Graduation year is required.';
     if (draft.has_existing_handshake_account === null) errs.has_existing_handshake_account = 'Please select Yes or No.';
+    if (draft.has_existing_handshake_account === true) {
+      if (!draft.handshake_email?.trim()) {
+        errs.handshake_email = 'Handshake email is required.';
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.handshake_email.trim())) {
+        errs.handshake_email = 'Please enter a valid Handshake email address.';
+      }
+      if (!draft.handshake_password?.trim()) {
+        errs.handshake_password = 'Handshake password is required.';
+      }
+    }
     if (!draft.resume_storage_path)  errs.resume = 'Please upload your resume (PDF, max 1 MB).';
     if (draft.student_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.student_email.trim()))
       errs.student_email = 'Please enter a valid email address.';
@@ -409,6 +423,8 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       profile_visibility: draft.profile_visibility,
       job_alerts_opt_in: draft.job_alerts_opt_in,
       has_existing_handshake_account: draft.has_existing_handshake_account,
+      handshake_email: draft.has_existing_handshake_account ? (draft.handshake_email?.trim().toLowerCase() || null) : null,
+      handshake_password: draft.has_existing_handshake_account ? (draft.handshake_password || null) : null,
       resume_storage_path:   draft.resume_storage_path,
       resume_file_size_bytes: draft.resume_file_size_bytes,
     };
@@ -442,6 +458,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
           ['Locations', draft.locations_open_to||'Any'],['Interests',draft.job_interests||'Any'],
           ['Visibility',vis],['Job alerts',draft.job_alerts_opt_in?'On':'Off'],
           ['Handshake acct',draft.has_existing_handshake_account?'Yes':'No'],
+          ...(draft.has_existing_handshake_account ? [['Handshake email', draft.handshake_email || '--']] : []),
           ['Resume',draft.resume_file_name??'Uploaded'],
         ].map(([label, value]) => (
           <View key={label} style={s.recapRow}>
@@ -553,13 +570,47 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
         {[{label:'Yes',value:true},{label:'No',value:false}].map(({label,value})=>(
           <TouchableOpacity key={label}
             style={[s.ynBtn, draft.has_existing_handshake_account===value&&s.ynBtnSel]}
-            onPress={()=>{ set('has_existing_handshake_account',value); if(!value) setGmailState('disconnected'); }}
+            onPress={()=>{
+              set('has_existing_handshake_account', value);
+              if (value) {
+                if (!draft.handshake_email) set('handshake_email', draft.student_email);
+              } else {
+                set('handshake_email', '');
+                set('handshake_password', '');
+                setGmailState('disconnected');
+              }
+            }}
           >
             <Text style={[s.ynTxt, draft.has_existing_handshake_account===value&&s.ynTxtSel]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </View>
       <ErrorText message={errors.has_existing_handshake_account} />
+
+      {draft.has_existing_handshake_account === true && (
+        <>
+          <FieldLabel label="Handshake email" required />
+          <TextInput
+            style={[s.input, errors.handshake_email && s.fieldError]}
+            value={draft.handshake_email}
+            onChangeText={v => set('handshake_email', v)}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            placeholder="jane@example.edu"
+          />
+          <ErrorText message={errors.handshake_email} />
+
+          <FieldLabel label="Handshake password" required />
+          <TextInput
+            style={[s.input, errors.handshake_password && s.fieldError]}
+            value={draft.handshake_password}
+            onChangeText={v => set('handshake_password', v)}
+            secureTextEntry
+            placeholder="••••••••••••"
+          />
+          <ErrorText message={errors.handshake_password} />
+        </>
+      )}
 
       <SectionHeader title="Gmail Access" />
       <Text style={s.helper}>Read-only access — used only to read the Handshake one-time password sent to your inbox. We never store your email password or read any other emails.</Text>

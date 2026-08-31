@@ -21,6 +21,8 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { encryptToken } from '../lib/crypto/tokenCipher.js';
+import { createSupabaseAdmin } from '../lib/supabase/admin.js';
 
 // Fields that must be present and non-empty in the request body
 const REQUIRED_FIELDS = [
@@ -117,6 +119,19 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing required field: has_existing_handshake_account' });
   }
 
+  const hasAccount = Boolean(body.has_existing_handshake_account);
+  if (hasAccount) {
+    if (!body.handshake_email || typeof body.handshake_email !== 'string' || !body.handshake_email.trim()) {
+      return res.status(400).json({ error: 'Missing required field: handshake_email when has_existing_handshake_account is true' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.handshake_email.trim())) {
+      return res.status(400).json({ error: 'handshake_email must be a valid email address' });
+    }
+    if (!body.handshake_password || typeof body.handshake_password !== 'string' || !body.handshake_password.trim()) {
+      return res.status(400).json({ error: 'Missing required field: handshake_password when has_existing_handshake_account is true' });
+    }
+  }
+
   const gradYear = Number(body.grad_year);
   if (!body.grad_year || isNaN(gradYear) || !Number.isInteger(gradYear)) {
     return res.status(400).json({ error: 'Missing required field: grad_year (must be an integer)' });
@@ -178,7 +193,18 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── 6. Upsert profiles row ─────────────────────────────────────────────────
+  // ── 6. Encrypt handshake_password if provided ──────────────────────────────
+  let handshakePasswordEnc = null;
+  if (hasAccount && body.handshake_password) {
+    try {
+      handshakePasswordEnc = encryptToken(body.handshake_password.trim());
+    } catch (encErr) {
+      console.error('[onboarding] handshake_password encryption error:', encErr.message);
+      return res.status(500).json({ error: 'Failed to secure Handshake credentials.' });
+    }
+  }
+
+  // ── 7. Upsert profiles row (client-role RLS scoped) ────────────────────────
   const profilePayload = {
     id:                               user.id,
     first_name:                       body.first_name.trim(),
@@ -196,7 +222,8 @@ export default async function handler(req, res) {
     job_interests:                    Array.isArray(body.job_interests)     ? body.job_interests     : [],
     profile_visibility:               body.profile_visibility || 'community',
     job_alerts_opt_in:                body.job_alerts_opt_in !== false,
-    has_existing_handshake_account:   Boolean(body.has_existing_handshake_account),
+    has_existing_handshake_account:   hasAccount,
+    handshake_email:                  hasAccount ? body.handshake_email.trim().toLowerCase() : null,
   };
 
   const { error: profileError } = await supabase
@@ -208,7 +235,26 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: profileError.message });
   }
 
-  // ── 7. Insert resumes row ──────────────────────────────────────────────────
+  // ── 8. Update handshake_password_enc via service role (column is service-role only) ─
+  let adminSupabase;
+  try {
+    adminSupabase = createSupabaseAdmin();
+  } catch (adminInitErr) {
+    console.error('[onboarding] createSupabaseAdmin init error:', adminInitErr.message);
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
+  const { error: passwordEncError } = await adminSupabase
+    .from('profiles')
+    .update({ handshake_password_enc: hasAccount ? handshakePasswordEnc : null })
+    .eq('id', user.id);
+
+  if (passwordEncError) {
+    console.error('[onboarding] handshake_password_enc update error:', passwordEncError.message);
+    return res.status(500).json({ error: 'Failed to store Handshake security credentials.' });
+  }
+
+  // ── 9. Insert resumes row ──────────────────────────────────────────────────
   const { error: resumeError } = await supabase
     .from('resumes')
     .insert({
@@ -222,7 +268,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: resumeError.message });
   }
 
-  // ── 8. Resolve getResumeUrl(profileId) ──────────────────────────────────────
+  // ── 10. Resolve getResumeUrl(profileId) ─────────────────────────────────────
   const resumeUrl = await getResumeUrl(supabase, user.id);
 
   return res.status(200).json({
