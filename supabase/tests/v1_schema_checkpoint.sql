@@ -129,6 +129,62 @@ $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------------
+-- Test 5: handshake_password_enc not writable by authenticated role
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+
+do $$
+begin
+  begin
+    update public.profiles
+    set handshake_password_enc = 'stolen'
+    where id = '11111111-1111-1111-1111-111111111111';
+    raise exception 'COLUMN REVOKE FAIL: authenticated could update handshake_password_enc';
+  exception
+    when insufficient_privilege then
+      raise notice 'PASS: handshake_password_enc update blocked for authenticated (%)', sqlerrm;
+    when others then
+      if sqlstate = '42501' then
+        raise notice 'PASS: handshake_password_enc update blocked for authenticated (%)', sqlerrm;
+      else
+        raise;
+      end if;
+  end;
+end;
+$$;
+
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- Test 6: claim_next_job not executable by authenticated role
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+
+do $$
+declare
+  result public.applications;
+begin
+  begin
+    result := public.claim_next_job('11111111-1111-1111-1111-111111111111', 'client-worker');
+    raise exception 'RPC REVOKE FAIL: authenticated could execute claim_next_job';
+  exception
+    when insufficient_privilege then
+      raise notice 'PASS: claim_next_job blocked for authenticated (%)', sqlerrm;
+    when others then
+      if sqlstate = '42501' then
+        raise notice 'PASS: claim_next_job blocked for authenticated (%)', sqlerrm;
+      else
+        raise;
+      end if;
+  end;
+end;
+$$;
+
+reset role;
+
 -- Cleanup test data
 delete from public.applications where id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 delete from public.handshake_jobs where id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
