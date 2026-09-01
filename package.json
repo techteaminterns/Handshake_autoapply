@@ -10,6 +10,8 @@
     "validate": "node scripts/validate-api.mjs",
     "test:schema": "supabase db reset --local",
     "test-tele": "node test-tele.js",
+    "check-webhook": "node test-check-webhook.js",
+    "test-telegram-buttons": "node test-telegram-buttons.js",
     "worker": "node worker/index.js",
     "test:worker": "node worker/test-a6-harness.js"
   },

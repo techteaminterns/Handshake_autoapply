@@ -1,22 +1,23 @@
 /**
  * test-a4-harness.js
  *
- * Phase V1-A4 Checkpoint Test Harness
+ * Phase V1-A4 Checkpoint Test Harness: Telegram Inline Yes/No Job Confirmation
  *
  * Validates the complete Telegram confirmation flow against the test matrix:
- * 1. Format verification: prompt text contains job title, company, url, and YES/NO prompt.
+ * 1. Format verification: prompt text contains job title, company, url, and button tap prompt.
+ *    - Validates InlineKeyboardMarkup structure and payload sizing under 64-byte limit.
  * 2. Send utility & queue advance:
- *    - Prompts oldest unconfirmed job.
+ *    - Prompts oldest unconfirmed job with inline Yes/No buttons.
  *    - Enforces 1 pending prompt at a time (does not send second prompt while first is pending).
- * 3. Webhook reply parsing & state machine:
- *    - Reply "yes" -> creates QUEUED application row, stamps resolved_at, auto-advances to next job.
- *    - Reply "no" -> creates REJECTED application row, stamps resolved_at.
- *    - Unrecognized reply ("maybe") -> sends reprompt, leaves prompt open.
- *    - Duplicate reply -> ignored (prompt already resolved).
- *    - Reply with no pending job -> ignored silently (logged).
+ * 3. Webhook callback query handling & state machine:
+ *    - Button click "Yes" (job:yes:<uuid>) -> answers query, strips buttons, creates QUEUED application row, stamps resolved_at, auto-advances to next job.
+ *    - Button click "No" (job:no:<uuid>) -> answers query, strips buttons, creates REJECTED application row, stamps resolved_at.
+ *    - User types text while pending -> sends hint to tap Yes/No on message, leaves prompt open without RPC call.
+ *    - Duplicate callback query -> answered, stripped, and ignored (prompt already resolved).
+ *    - Callback / reply with no pending job -> ignored silently.
  *    - Permanent rejection -> cannot be queued later.
  * 4. Multi-job sequence:
- *    - Inserts 3 jobs, verifies they are prompted sequentially one by one upon reply.
+ *    - Inserts 3 jobs, verifies they are prompted sequentially one by one upon button click.
  *
  * Usage:
  *   node test-a4-harness.js
@@ -25,6 +26,7 @@
 import 'dotenv/config';
 import { createSupabaseAdmin } from './lib/supabase/admin.js';
 import {
+  buildJobConfirmationKeyboard,
   formatJobConfirmationMessage,
   getPendingConfirmationJob,
   getNextJobAwaitingPrompt,
@@ -32,7 +34,10 @@ import {
   advanceConfirmationQueue,
   resolvePendingConfirmation,
 } from './lib/telegram/jobConfirmation.js';
-import { onTelegramReply } from './api/telegram/webhook.js';
+import {
+  onTelegramReply,
+  onTelegramCallbackQuery,
+} from './api/telegram/webhook.js';
 
 const TEST_PROFILE_ID = '11111111-a4a4-1111-a4a4-111111111111';
 const TEST_CHAT_ID = 999111222;
@@ -97,25 +102,40 @@ function assert(condition, message) {
 
 async function runTests() {
   console.log('================================================================');
-  console.log('  Phase V1-A4: Telegram Job Confirmation Checkpoint Test Suite  ');
+  console.log('  Phase V1-A4: Telegram Inline Job Confirmation Test Suite      ');
   console.log('================================================================');
 
   const supabase = createSupabaseAdmin();
   await setupTestData(supabase);
 
-  // Mock Telegram send to capture outgoing messages
+  // Mock Telegram API calls
   const sentMessages = [];
+  const answeredQueries = [];
+  const editedMarkups = [];
+
   const mockTelegramSend = async (chatId, text, options) => {
-    sentMessages.push({ chatId, text, options, timestamp: new Date() });
-    return { ok: true, result: { message_id: sentMessages.length + 100, text } };
+    const msgId = sentMessages.length + 100;
+    sentMessages.push({ chatId, text, options, messageId: msgId, timestamp: new Date() });
+    return { ok: true, result: { message_id: msgId, text } };
+  };
+
+  const mockTelegramAnswer = async (queryId, options = {}) => {
+    answeredQueries.push({ queryId, options, timestamp: new Date() });
+    return { ok: true, result: true };
+  };
+
+  const mockTelegramEditMarkup = async (chatId, messageId, replyMarkup) => {
+    editedMarkups.push({ chatId, messageId, replyMarkup, timestamp: new Date() });
+    return { ok: true, result: true };
   };
 
   try {
     // -------------------------------------------------------------------------
-    // Test 1: Message Formatting
+    // Test 1: Message Formatting & Inline Keyboard Markup
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 1: formatJobConfirmationMessage ---');
+    console.log('\n--- Test 1: formatJobConfirmationMessage & buildJobConfirmationKeyboard ---');
     const sampleJob = {
+      id: JOB_1_ID,
       title: 'Full Stack Engineer',
       company: 'Acme Systems',
       url: 'https://app.joinhandshake.com/jobs/12345',
@@ -123,7 +143,16 @@ async function runTests() {
     const formatted = formatJobConfirmationMessage(sampleJob);
     assert(formatted.includes('Apply to Full Stack Engineer at Acme Systems?'), 'Formatted text contains title and company');
     assert(formatted.includes('https://app.joinhandshake.com/jobs/12345'), 'Formatted text contains job URL');
-    assert(formatted.includes('Reply YES to queue or NO to skip.'), 'Formatted text contains YES/NO instructions');
+    assert(formatted.includes('Tap Yes to queue or No to skip.'), 'Formatted text contains button prompt copy');
+
+    const keyboard = buildJobConfirmationKeyboard(JOB_1_ID);
+    assert(Array.isArray(keyboard?.inline_keyboard), 'buildJobConfirmationKeyboard returns inline_keyboard array');
+    assert(keyboard.inline_keyboard[0].length === 2, 'inline_keyboard has 2 buttons in first row');
+    assert(keyboard.inline_keyboard[0][0].text === 'Yes', 'First button is "Yes"');
+    assert(keyboard.inline_keyboard[0][0].callback_data === `job:yes:${JOB_1_ID}`, 'First button callback_data is job:yes:<uuid>');
+    assert(keyboard.inline_keyboard[0][1].text === 'No', 'Second button is "No"');
+    assert(keyboard.inline_keyboard[0][1].callback_data === `job:no:${JOB_1_ID}`, 'Second button callback_data is job:no:<uuid>');
+    assert(Buffer.byteLength(keyboard.inline_keyboard[0][0].callback_data, 'utf8') <= 64, 'callback_data stays under 64 bytes');
 
     // -------------------------------------------------------------------------
     // Test 2: Seed 3 Scraped Jobs
@@ -162,9 +191,9 @@ async function runTests() {
     console.log('  ✓ Inserted 3 unprompted handshake_jobs (ordered by discovered_at)');
 
     // -------------------------------------------------------------------------
-    // Test 3: Advance Queue -> Prompts Oldest Job (Job 1)
+    // Test 3: Advance Queue -> Prompts Oldest Job (Job 1) with Inline Buttons
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 3: advanceConfirmationQueue prompts oldest job ---');
+    console.log('\n--- Test 3: advanceConfirmationQueue prompts oldest job with inline keyboard ---');
     const advance1 = await advanceConfirmationQueue(TEST_PROFILE_ID, {
       supabase,
       telegramSendFn: mockTelegramSend,
@@ -173,6 +202,14 @@ async function runTests() {
     assert(advance1.job.id === JOB_1_ID, 'Prompted oldest job (Job 1)');
     assert(sentMessages.length === 1, 'Exactly one Telegram message sent');
     assert(sentMessages[0].text.includes('Junior SWE at Alpha Inc'), 'Message text matches Job 1');
+    assert(
+      sentMessages[0].options?.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data === `job:yes:${JOB_1_ID}`,
+      'Message includes inline Yes button with callback_data job:yes:<jobId>'
+    );
+    assert(
+      sentMessages[0].options?.reply_markup?.inline_keyboard?.[0]?.[1]?.callback_data === `job:no:${JOB_1_ID}`,
+      'Message includes inline No button with callback_data job:no:<jobId>'
+    );
 
     // Verify DB timestamp stamped
     const pendingJobAfterAdvance = await getPendingConfirmationJob(supabase, TEST_PROFILE_ID);
@@ -194,30 +231,56 @@ async function runTests() {
     assert(sentMessages.length === 1, 'No additional Telegram message sent while prompt is pending');
 
     // -------------------------------------------------------------------------
-    // Test 5: Unrecognized Reply ("maybe") -> Reprompt without closing
+    // Test 5: User types text while pending -> Hint sent, prompt stays open
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 5: Unrecognized reply ("maybe") reprompts user ---');
+    console.log('\n--- Test 5: Inbound text while confirmation pending hints button tap ---');
     await onTelegramReply(TEST_CHAT_ID, { text: 'maybe later' }, {}, { supabase, telegramSendFn: mockTelegramSend });
-    assert(sentMessages.length === 2, 'Sent reprompt message for unrecognized reply');
-    assert(sentMessages[1].text.includes('Please reply YES to queue this application or NO to skip.'), 'Reprompt content matched');
+    assert(sentMessages.length === 2, 'Sent hint message when user typed text');
+    assert(sentMessages[1].text.includes('Please tap Yes or No on the job message.'), 'Hint text matched');
 
-    // Verify job is STILL pending
+    // Verify job is STILL pending (not resolved by typed text)
     const stillPending = await getPendingConfirmationJob(supabase, TEST_PROFILE_ID);
     assert(stillPending !== null && stillPending.id === JOB_1_ID, 'Job 1 is still pending');
 
     // -------------------------------------------------------------------------
-    // Test 6: Inbound reply from unknown / unlinked chat_id -> Ignored
+    // Test 6: Inbound message from unknown / unlinked chat_id -> Ignored
     // -------------------------------------------------------------------------
     console.log('\n--- Test 6: Unlinked chat_id ignored silently ---');
     const initialMsgCount = sentMessages.length;
-    await onTelegramReply(999999999, { text: 'yes' }, {}, { supabase, telegramSendFn: mockTelegramSend });
+    await onTelegramReply(999999999, { text: 'hello' }, {}, { supabase, telegramSendFn: mockTelegramSend });
     assert(sentMessages.length === initialMsgCount, 'No reply sent to unknown chat_id');
 
     // -------------------------------------------------------------------------
-    // Test 7: User replies "YES" to Job 1 via webhook -> QUEUED Application + Auto-advance to Job 2
+    // Test 7: User clicks "Yes" button for Job 1 -> QUEUED Application + Auto-advance to Job 2
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 7: User replies "YES" to Job 1 via webhook onTelegramReply ---');
-    await onTelegramReply(TEST_CHAT_ID, { text: 'yes' }, {}, { supabase, telegramSendFn: mockTelegramSend });
+    console.log('\n--- Test 7: User clicks "Yes" button via onTelegramCallbackQuery ---');
+    const job1MsgId = sentMessages[0].messageId;
+    await onTelegramCallbackQuery(
+      {
+        id: 'cb_query_1',
+        data: `job:yes:${JOB_1_ID}`,
+        message: {
+          message_id: job1MsgId,
+          chat: { id: TEST_CHAT_ID },
+        },
+      },
+      {},
+      {
+        supabase,
+        telegramSendFn: mockTelegramSend,
+        telegramAnswerFn: mockTelegramAnswer,
+        telegramEditMarkupFn: mockTelegramEditMarkup,
+      }
+    );
+
+    // Verify callback query answered
+    assert(answeredQueries.some((q) => q.queryId === 'cb_query_1'), 'answerCallbackQuery called for query cb_query_1');
+
+    // Verify buttons stripped from original message
+    assert(
+      editedMarkups.some((e) => e.messageId === job1MsgId && JSON.stringify(e.replyMarkup) === JSON.stringify({ inline_keyboard: [] })),
+      'editTelegramMessageReplyMarkup stripped inline keyboard from original prompt'
+    );
 
     // Verify applications row created
     const { data: app1 } = await supabase
@@ -234,15 +297,36 @@ async function runTests() {
     const { data: job1Db } = await supabase.from('handshake_jobs').select('*').eq('id', JOB_1_ID).single();
     assert(job1Db.telegram_prompt_resolved_at !== null, 'Job 1 telegram_prompt_resolved_at is populated');
 
-    // Verify Job 2 was automatically prompted via advanceConfirmationQueue in webhook
-    assert(sentMessages.some((m) => m.text.includes('Backend Dev at Beta LLC')), 'Job 2 auto-prompted after YES reply');
+    // Verify Job 2 was automatically prompted via advanceConfirmationQueue with inline keyboard
+    const job2PromptMsg = sentMessages.find((m) => m.text.includes('Backend Dev at Beta LLC'));
+    assert(job2PromptMsg !== undefined, 'Job 2 auto-prompted after YES button click');
+    assert(
+      job2PromptMsg.options?.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data === `job:yes:${JOB_2_ID}`,
+      'Job 2 prompt includes inline Yes button with callback_data job:yes:<JOB_2_ID>'
+    );
 
     // -------------------------------------------------------------------------
-    // Test 8: Duplicate reply to resolved Job 1 -> Ignored
+    // Test 8: Duplicate button click on resolved Job 1 -> Ignored
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 8: Duplicate reply to resolved job ignored ---');
-    const duplicateResolve = await resolvePendingConfirmation(TEST_PROFILE_ID, JOB_1_ID, 'yes', { supabase });
-    assert(duplicateResolve.status === 'ignored_duplicate', 'Duplicate reply returned "ignored_duplicate"');
+    console.log('\n--- Test 8: Duplicate button click on resolved job ignored ---');
+    await onTelegramCallbackQuery(
+      {
+        id: 'cb_query_1_dup',
+        data: `job:yes:${JOB_1_ID}`,
+        message: {
+          message_id: job1MsgId,
+          chat: { id: TEST_CHAT_ID },
+        },
+      },
+      {},
+      {
+        supabase,
+        telegramSendFn: mockTelegramSend,
+        telegramAnswerFn: mockTelegramAnswer,
+        telegramEditMarkupFn: mockTelegramEditMarkup,
+      }
+    );
+    assert(answeredQueries.some((q) => q.queryId === 'cb_query_1_dup'), 'answerCallbackQuery called for duplicate query');
 
     // -------------------------------------------------------------------------
     // Test 9: Active unconfirmed job is now Job 2
@@ -252,10 +336,27 @@ async function runTests() {
     assert(pendingJob2 !== null && pendingJob2.id === JOB_2_ID, 'Pending job is now Job 2');
 
     // -------------------------------------------------------------------------
-    // Test 10: User replies "NO" to Job 2 via webhook -> REJECTED Application + Auto-advance to Job 3
+    // Test 10: User clicks "No" button on Job 2 -> REJECTED Application + Auto-advance to Job 3
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 10: User replies "NO" to Job 2 via webhook ---');
-    await onTelegramReply(TEST_CHAT_ID, { text: 'no' }, {}, { supabase, telegramSendFn: mockTelegramSend });
+    console.log('\n--- Test 10: User clicks "No" button for Job 2 via onTelegramCallbackQuery ---');
+    const job2MsgId = job2PromptMsg.messageId;
+    await onTelegramCallbackQuery(
+      {
+        id: 'cb_query_2',
+        data: `job:no:${JOB_2_ID}`,
+        message: {
+          message_id: job2MsgId,
+          chat: { id: TEST_CHAT_ID },
+        },
+      },
+      {},
+      {
+        supabase,
+        telegramSendFn: mockTelegramSend,
+        telegramAnswerFn: mockTelegramAnswer,
+        telegramEditMarkupFn: mockTelegramEditMarkup,
+      }
+    );
 
     const { data: app2 } = await supabase
       .from('applications')
@@ -267,13 +368,18 @@ async function runTests() {
     assert(app2.status === 'REJECTED', 'Application status is REJECTED');
     assert(app2.finished_at !== null, 'Application finished_at is populated');
 
-    // Verify Job 3 was auto-prompted
-    assert(sentMessages.some((m) => m.text.includes('ML Engineer at Gamma AI')), 'Job 3 auto-prompted after NO reply');
+    // Verify Job 3 was auto-prompted with inline keyboard
+    const job3PromptMsg = sentMessages.find((m) => m.text.includes('ML Engineer at Gamma AI'));
+    assert(job3PromptMsg !== undefined, 'Job 3 auto-prompted after NO button click');
+    assert(
+      job3PromptMsg.options?.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data === `job:yes:${JOB_3_ID}`,
+      'Job 3 prompt includes inline Yes button'
+    );
 
     // -------------------------------------------------------------------------
-    // Test 11: Late "YES" reply on permanently REJECTED Job 2 -> Ignored
+    // Test 11: Late "YES" button click on permanently REJECTED Job 2 -> Ignored
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 11: Late YES on previously REJECTED job blocked ---');
+    console.log('\n--- Test 11: Late YES button click on previously REJECTED job blocked ---');
     // Temporarily clear resolved_at on job 2 to test race condition
     await supabase.from('handshake_jobs').update({ telegram_prompt_resolved_at: null }).eq('id', JOB_2_ID);
     const rejectRetry = await resolvePendingConfirmation(TEST_PROFILE_ID, JOB_2_ID, 'yes', { supabase });
@@ -281,10 +387,27 @@ async function runTests() {
     await supabase.from('handshake_jobs').update({ telegram_prompt_resolved_at: new Date().toISOString() }).eq('id', JOB_2_ID);
 
     // -------------------------------------------------------------------------
-    // Test 12: Resolve Job 3 with YES via webhook
+    // Test 12: Resolve Job 3 with "YES" button click via onTelegramCallbackQuery
     // -------------------------------------------------------------------------
-    console.log('\n--- Test 12: Resolve Job 3 with YES via webhook ---');
-    await onTelegramReply(TEST_CHAT_ID, { text: 'yes' }, {}, { supabase, telegramSendFn: mockTelegramSend });
+    console.log('\n--- Test 12: Resolve Job 3 with YES button click ---');
+    const job3MsgId = job3PromptMsg.messageId;
+    await onTelegramCallbackQuery(
+      {
+        id: 'cb_query_3',
+        data: `job:yes:${JOB_3_ID}`,
+        message: {
+          message_id: job3MsgId,
+          chat: { id: TEST_CHAT_ID },
+        },
+      },
+      {},
+      {
+        supabase,
+        telegramSendFn: mockTelegramSend,
+        telegramAnswerFn: mockTelegramAnswer,
+        telegramEditMarkupFn: mockTelegramEditMarkup,
+      }
+    );
 
     const { data: app3 } = await supabase
       .from('applications')
@@ -305,7 +428,7 @@ async function runTests() {
     assert(advanceEmpty.status === 'queue_empty', 'advanceConfirmationQueue returned "queue_empty"');
 
     // -------------------------------------------------------------------------
-    // Test 14: Reply with no pending job -> Ignored
+    // Test 14: Inbound reply / callback with no pending job -> Ignored
     // -------------------------------------------------------------------------
     console.log('\n--- Test 14: Inbound reply with no pending job ignored ---');
     const pendingNone = await getPendingConfirmationJob(supabase, TEST_PROFILE_ID);
