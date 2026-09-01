@@ -897,12 +897,20 @@ async function runManualGuidedLogin(runId, profile = defaultProfile, existingPag
     console.log('⚠️  Page error:', error.message);
   });
 
-  let email = profile.studentEmail || 'laptap005@gmail.com';
-  let firstName = profile.firstName || 'Ajith';
-  let lastName = profile.lastName || 'Kumar';
-  let mobileNumber = profile.phone || '8897717454';
+  let email = profile.studentEmail;
+  let firstName = profile.firstName;
+  let lastName = profile.lastName;
+  let mobileNumber = profile.phone;
   let linkedinUrl = profile.linkedinUrl || 'N/A';
   let school = profile.schoolName || 'University of Engineering';
+
+  if (!email || !firstName || !lastName || !mobileNumber) {
+    throw new Error('Bot profile is missing required fields (email, firstName, lastName, phone). Set bot/.env.');
+  }
+
+  if (!email || !firstName || !lastName || !mobileNumber) {
+    throw new Error('Bot profile is missing required fields (email, firstName, lastName, phone). Set bot/.env.');
+  }
   
   // Onboarding data variables (declare outside try block for error handling)
   let backgroundValue = '';
@@ -994,13 +1002,13 @@ async function runManualGuidedLogin(runId, profile = defaultProfile, existingPag
     console.log('STEP 5: Injecting code into passcode field and auto-clicking Verify...');
     const emailPasscodeSelectors = 'input[name="passcode"], input[name="code"], input[name="otp"], input[autocomplete="one-time-code"], input[placeholder*="code" i]';
     await page.locator(emailPasscodeSelectors).first().fill(code);
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
     await page.click('button:has-text("Verify")');
-    await page.waitForTimeout(5000);
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await page.waitForTimeout(1500);
     saveState(runId, 5, { email });
 
     // Check if we moved away from the access/OTP screen or reached onboarding
-    await page.waitForTimeout(2000);
     const postEmailUrl = page.url();
     console.log('Current URL after Email OTP:', postEmailUrl);
 
@@ -1068,7 +1076,10 @@ async function runManualGuidedLogin(runId, profile = defaultProfile, existingPag
           }
       
           // Auto-fill mobile number if available
-          const targetPhone = profile?.phone || defaultProfile.phone || '8897717454';
+          const targetPhone = profile?.phone || defaultProfile.phone;
+          if (!targetPhone) {
+            throw new Error('Bot profile phone is required for OTP flows. Set BOT_PHONE in bot/.env.');
+          }
           for (const selector of mobileSelectors) {
             try {
               const field = await page.locator(selector).first();
@@ -1381,31 +1392,41 @@ async function runManualGuidedLogin(runId, profile = defaultProfile, existingPag
     }
     
     // STEP 8 — Name and surname
-    console.log('STEP 8: Checking name fields...');
-    const firstNameSelector = 'input[name="first_name"], input[placeholder*="first" i]';
-    const lastNameSelector = 'input[name="last_name"], input[placeholder*="last" i]';
-
-    const fnField = page.locator(firstNameSelector).first();
-    if (await fnField.isVisible({ timeout: 5000 }).catch(() => false)) {
-      firstName = profile.firstName || 'Ajith';
-      console.log('STEP 8: Auto-filling first name:', firstName);
-      await fnField.fill(firstName);
-    }
-
-    const lnField = page.locator(lastNameSelector).first();
-    if (await lnField.isVisible({ timeout: 5000 }).catch(() => false)) {
-      lastName = profile.lastName || 'Kumar';
-      console.log('STEP 8b: Auto-filling last name:', lastName);
-      await lnField.fill(lastName);
-    }
-    saveState(runId, 8, { email, firstName, lastName });
+    const currentStep8Url = page.url();
+    const isAlreadyPostAuth = currentStep8Url.includes('/fellow/') || currentStep8Url.includes('/stu/') || currentStep8Url.includes('dashboard') || currentStep8Url.includes('onboarding');
     
-    console.log('STEP 8c: Auto-submitting name details...');
-    try {
-      await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Next")');
-      await page.waitForTimeout(3000);
-    } catch (e) {
-      console.log('No submit button found, continuing...');
+    if (!isAlreadyPostAuth) {
+      console.log('STEP 8: Checking name fields...');
+      const firstNameSelector = 'input[name="first_name"], input[placeholder*="first" i]';
+      const lastNameSelector = 'input[name="last_name"], input[placeholder*="last" i]';
+
+      const fnField = page.locator(firstNameSelector).first();
+      if (await fnField.isVisible({ timeout: 1000 }).catch(() => false)) {
+        firstName = profile.firstName;
+        if (!firstName) {
+          throw new Error('Bot profile firstName is required. Set BOT_FIRST_NAME in bot/.env.');
+        }
+        console.log('STEP 8: Auto-filling first name:', firstName);
+        await fnField.fill(firstName);
+      }
+
+      const lnField = page.locator(lastNameSelector).first();
+      if (await lnField.isVisible({ timeout: 1000 }).catch(() => false)) {
+        lastName = profile.lastName || 'Kumar';
+        console.log('STEP 8b: Auto-filling last name:', lastName);
+        await lnField.fill(lastName);
+      }
+      saveState(runId, 8, { email, firstName, lastName });
+      
+      console.log('STEP 8c: Auto-submitting name details...');
+      try {
+        await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Next")');
+        await page.waitForTimeout(1000);
+      } catch (e) {
+        console.log('No submit button found, continuing...');
+      }
+    } else {
+      console.log('✅ Name details already completed (already on dashboard/onboarding).');
     }
 
     // If an existingPage was provided, return user data to the caller for external flow control

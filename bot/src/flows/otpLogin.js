@@ -1,7 +1,7 @@
 const path = require('path');
 const { launchBrowser } = require('../browser/launch');
 const { safeExit } = require('../safeExit');
-const { pauseForLiveHandoff, markRunStatus } = require('../stubs/sideA');
+const { pauseForLiveHandoff, markJobStatus } = require('../stubs/sideA');
 const { runOnboardingAutofill } = require('./manualGuidedLogin');
 const { runApplyToJob } = require('./applyToJob');
 
@@ -113,7 +113,8 @@ async function runOtpLogin(profile, runId) {
     
     // Step 6: Auto-click verify button
     await page.click('button:has-text("Verify")');
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await page.waitForTimeout(1000);
 
     // Step 7: Detect post-auth user page state
     console.log('🔍 Detecting page state after OTP verification...');
@@ -139,13 +140,13 @@ async function runOtpLogin(profile, runId) {
       const screenshotPath = path.resolve(process.cwd(), 'auth-detection-failure.png');
       await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
       console.error(`❌ Authentication failure or unresolved page state: ${pageState}. Diagnostic screenshot saved to ${screenshotPath}`);
-      await markRunStatus(runId, 'failed', `Auth error or unknown page state: ${pageState}`);
+      await markJobStatus(runId, 'FAILED', `Auth error or unknown page state: ${pageState}`).catch(() => {});
       throw new Error(`Auth verification failed with state: ${pageState}`);
     }
     
-    await markRunStatus(runId, 'succeeded');
+    await markJobStatus(runId, 'SUBMITTED', 'verify').catch(() => {});
   } catch (err) {
-    await markRunStatus(runId, 'failed', err.message);
+    await markJobStatus(runId, 'FAILED', err.message).catch(() => {});
     throw err;
   } finally {
     await safeExit(browser);

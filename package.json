@@ -5,10 +5,17 @@
     "googleapis": "^140.0.0"
   },
   "scripts": {
-    "test-rls": "1test.js"
+    "lint": "eslint api lib",
+    "typecheck": "tsc --noEmit",
+    "validate": "node scripts/validate-api.mjs",
+    "test:schema": "supabase db reset --local",
+    "test-tele": "node test-tele.js"
   },
   "type": "module",
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "globals": "^16.4.0",
     "typescript": "^5.3.3"
   }
 }

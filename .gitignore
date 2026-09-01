@@ -24,6 +24,31 @@ node_modules/
 .expo/
 **/.expo/
 .metro-cache/
+src/frontend/dist-web/
+
+# Supabase CLI cache (linked project metadata — never commit)
+supabase/.temp/
+
+# Local purge artifacts (never commit)
+.git-filter-repo-replacements.txt
+.pre-purge-wip.patch
+
+# Bot runtime artifacts (may contain PII)
+bot/bot-state.json
+bot/captured_details.csv
+bot/data/profile.csv
+bot/.env
+
+# Local scratch scripts
+test-tele.js
+
+# GitHub Actions workflows (kept local for now)
+.github/
+
+# Expo logs / local env
+src/frontend/.expo/
+src/frontend/.env
+src/frontend/.env.*
 
 # OS & Logs
 .DS_Store

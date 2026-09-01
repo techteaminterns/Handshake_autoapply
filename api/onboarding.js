@@ -82,6 +82,7 @@ export default async function handler(req, res) {
   // ── 1. Verify JWT ──────────────────────────────────────────────────────────
   const authHeader = req.headers['authorization'] ?? '';
   if (!authHeader.startsWith('Bearer ')) {
+    console.warn('[onboarding 401] Missing or invalid Bearer token');
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const token = authHeader.slice(7);
@@ -90,7 +91,7 @@ export default async function handler(req, res) {
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    console.error('[onboarding] Missing SUPABASE_URL or SUPABASE_ANON_KEY');
+    console.error('[onboarding 500] Missing SUPABASE_URL or SUPABASE_ANON_KEY');
     return res.status(500).json({ error: 'Server configuration error' });
   }
 
@@ -101,6 +102,7 @@ export default async function handler(req, res) {
 
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) {
+    console.warn('[onboarding 401] User authentication verification failed:', authError?.message);
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -111,40 +113,48 @@ export default async function handler(req, res) {
   for (const field of REQUIRED_FIELDS) {
     const val = body[field];
     if (val === undefined || val === null || String(val).trim() === '') {
+      console.warn(`[onboarding 400] Missing required field: ${field}`);
       return res.status(400).json({ error: `Missing required field: ${field}` });
     }
   }
 
   if (body.has_existing_handshake_account === undefined || body.has_existing_handshake_account === null) {
+    console.warn('[onboarding 400] Missing required field: has_existing_handshake_account');
     return res.status(400).json({ error: 'Missing required field: has_existing_handshake_account' });
   }
 
   const hasAccount = Boolean(body.has_existing_handshake_account);
   if (hasAccount) {
     if (!body.handshake_email || typeof body.handshake_email !== 'string' || !body.handshake_email.trim()) {
+      console.warn('[onboarding 400] Missing required field: handshake_email when has_existing_handshake_account is true');
       return res.status(400).json({ error: 'Missing required field: handshake_email when has_existing_handshake_account is true' });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.handshake_email.trim())) {
+      console.warn('[onboarding 400] handshake_email must be a valid email address');
       return res.status(400).json({ error: 'handshake_email must be a valid email address' });
     }
     if (!body.handshake_password || typeof body.handshake_password !== 'string' || !body.handshake_password.trim()) {
+      console.warn('[onboarding 400] Missing required field: handshake_password when has_existing_handshake_account is true');
       return res.status(400).json({ error: 'Missing required field: handshake_password when has_existing_handshake_account is true' });
     }
   }
 
   const gradYear = Number(body.grad_year);
   if (!body.grad_year || isNaN(gradYear) || !Number.isInteger(gradYear)) {
+    console.warn('[onboarding 400] Missing or invalid grad_year (must be an integer)');
     return res.status(400).json({ error: 'Missing required field: grad_year (must be an integer)' });
   }
 
   // ── 4. Domain-specific validation ─────────────────────────────────────────
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.student_email.trim())) {
+    console.warn('[onboarding 400] student_email must be a valid email address');
     return res.status(400).json({ error: 'student_email must be a valid email address' });
   }
 
   const jobTypes = Array.isArray(body.job_types) ? body.job_types : [];
   for (const jt of jobTypes) {
     if (!VALID_JOB_TYPES.has(jt)) {
+      console.warn(`[onboarding 400] Invalid job_type value: "${jt}"`);
       return res.status(400).json({ error: `Invalid job_type value: "${jt}". Must be one of: full_time, part_time, internship, not_sure` });
     }
   }
@@ -186,9 +196,11 @@ export default async function handler(req, res) {
     }
   } else {
     if (!storagePath || isNaN(resumeBytes)) {
+      console.warn('[onboarding 400] Missing resume: provide resume_base64 or resume_storage_path + resume_file_size_bytes');
       return res.status(400).json({ error: 'Missing resume: provide resume_base64 or resume_storage_path + resume_file_size_bytes' });
     }
     if (resumeBytes > MAX_RESUME_BYTES) {
+      console.warn('[onboarding 400] Resume must be under 1 MB');
       return res.status(400).json({ error: 'Resume must be under 1 MB (1,048,576 bytes)' });
     }
   }
