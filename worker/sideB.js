@@ -113,7 +113,8 @@ export async function runApplyToJob(jobUrl, profile, applicationId) {
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   if (applicationId) {
-    await markJobStatus(applicationId, 'SUBMITTED', 'Quick Apply completed (stub)');
+    await markJobStatus(applicationId, 'SUBMITTING', 'submit');
+    await markJobStatus(applicationId, 'SUBMITTED', 'verify');
   }
 
   return { ok: true, status: 'SUBMITTED' };

@@ -84,6 +84,9 @@ async function runApplyToJob(jobLink, profileId, runId, existingPage = null) {
       }
     }
 
+    console.log('[applyToJob] Marking status as SUBMITTING...');
+    await markJobStatus(runId, 'SUBMITTING', 'submit');
+
     // Step 6: Auto-submit application
     const mockSubmitBtn = page.locator('[data-testid="submit-application-btn"]');
     if ((await mockSubmitBtn.count()) > 0) {
