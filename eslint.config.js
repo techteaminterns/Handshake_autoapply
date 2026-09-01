@@ -7,7 +7,7 @@ export default [
     ignores: ['node_modules/**', 'src/frontend/**', 'bot/**', 'mock-handshake/**'],
   },
   {
-    files: ['api/**/*.js', 'lib/**/*.js'],
+    files: ['api/**/*.js', 'lib/**/*.js', 'worker/**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

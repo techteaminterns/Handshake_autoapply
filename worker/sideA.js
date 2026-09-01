@@ -27,6 +27,16 @@
 
 import { createSupabaseAdmin } from '../lib/supabase/admin.js';
 
+let mockOverrides = {};
+
+export function setSideAMockOverrides(overrides) {
+  mockOverrides = { ...mockOverrides, ...overrides };
+}
+
+export function resetSideAMocks() {
+  mockOverrides = {};
+}
+
 // ---------------------------------------------------------------------------
 // 1. getProfile
 // ---------------------------------------------------------------------------
@@ -61,6 +71,13 @@ import { createSupabaseAdmin } from '../lib/supabase/admin.js';
  * @throws {Error} '[getProfile] <supabase error message>'  — DB error
  */
 export async function getProfile(profileId) {
+  if (typeof mockOverrides.getProfile === 'function') {
+    return await mockOverrides.getProfile(profileId);
+  }
+  if (mockOverrides.getProfile !== undefined) {
+    return mockOverrides.getProfile;
+  }
+
   const admin = createSupabaseAdmin();
 
   const { data, error } = await admin
@@ -110,6 +127,13 @@ export async function getProfile(profileId) {
  * @throws {Error} '[getResumeUrl] <supabase error message>' — DB error
  */
 export async function getResumeUrl(profileId) {
+  if (typeof mockOverrides.getResumeUrl === 'function') {
+    return await mockOverrides.getResumeUrl(profileId);
+  }
+  if (mockOverrides.getResumeUrl !== undefined) {
+    return mockOverrides.getResumeUrl;
+  }
+
   const admin = createSupabaseAdmin();
 
   // Step 1: look up the storage_path from the resumes table
@@ -153,6 +177,13 @@ export async function getResumeUrl(profileId) {
  * @throws {Error} '[claimNextJob] <supabase error message>' — DB/RPC error
  */
 export async function claimNextJob(profileId, workerId) {
+  if (typeof mockOverrides.claimNextJob === 'function') {
+    return await mockOverrides.claimNextJob(profileId, workerId);
+  }
+  if (mockOverrides.claimNextJob !== undefined) {
+    return mockOverrides.claimNextJob;
+  }
+
   const admin = createSupabaseAdmin();
 
   const { data, error } = await admin.rpc('claim_next_job', {
@@ -185,6 +216,13 @@ export async function claimNextJob(profileId, workerId) {
  * @throws {Error} '[markJobStatus] ...'            — DB error
  */
 export async function markJobStatus(applicationId, status, stepOrReason) {
+  if (typeof mockOverrides.markJobStatus === 'function') {
+    return await mockOverrides.markJobStatus(applicationId, status, stepOrReason);
+  }
+  if (mockOverrides.markJobStatus !== undefined) {
+    return mockOverrides.markJobStatus;
+  }
+
   const admin = createSupabaseAdmin();
   const now = new Date().toISOString();
 
@@ -266,6 +304,13 @@ export async function createIntervention(
     throw new Error(`invalid intervention type: ${type}`);
   }
 
+  if (typeof mockOverrides.createIntervention === 'function') {
+    return await mockOverrides.createIntervention(profileId, type, applicationId, questionText, options);
+  }
+  if (mockOverrides.createIntervention !== undefined) {
+    return mockOverrides.createIntervention;
+  }
+
   const admin = createSupabaseAdmin();
 
   const { data, error } = await admin
@@ -310,6 +355,13 @@ const RESOLVE_POLL_INTERVAL_MS = 2_000;     // 2 seconds per 06-implementation.m
  * @throws {Error} '[resolveIntervention] ...'      — DB error mid-poll
  */
 export async function resolveIntervention(interventionId, timeoutMs = DEFAULT_RESOLVE_TIMEOUT_MS) {
+  if (typeof mockOverrides.resolveIntervention === 'function') {
+    return await mockOverrides.resolveIntervention(interventionId, timeoutMs);
+  }
+  if (mockOverrides.resolveIntervention !== undefined) {
+    return mockOverrides.resolveIntervention;
+  }
+
   const admin = createSupabaseAdmin();
   const deadline = Date.now() + timeoutMs;
 
@@ -355,6 +407,13 @@ export async function resolveIntervention(interventionId, timeoutMs = DEFAULT_RE
  */
 export async function storeJobsFromScrape(profileId, jobs) {
   if (!jobs || jobs.length === 0) return 0;
+
+  if (typeof mockOverrides.storeJobsFromScrape === 'function') {
+    return await mockOverrides.storeJobsFromScrape(profileId, jobs);
+  }
+  if (mockOverrides.storeJobsFromScrape !== undefined) {
+    return mockOverrides.storeJobsFromScrape;
+  }
 
   // Validate every entry before touching the DB
   for (const j of jobs) {
@@ -419,6 +478,13 @@ export async function storeJobsFromScrape(profileId, jobs) {
  * @throws {Error} '[checkAndIncrementActionCount] ...' — DB/RPC error
  */
 export async function checkAndIncrementActionCount(profileId) {
+  if (typeof mockOverrides.checkAndIncrementActionCount === 'function') {
+    return await mockOverrides.checkAndIncrementActionCount(profileId);
+  }
+  if (mockOverrides.checkAndIncrementActionCount !== undefined) {
+    return Boolean(mockOverrides.checkAndIncrementActionCount);
+  }
+
   const admin = createSupabaseAdmin();
 
   const { data, error } = await admin.rpc('check_and_increment_action_count', {
@@ -430,3 +496,69 @@ export async function checkAndIncrementActionCount(profileId) {
   // RPC returns boolean true/false
   return Boolean(data);
 }
+
+// ---------------------------------------------------------------------------
+// 9. getJob
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the handshake_jobs row for a given job UUID.
+ *
+ * @param {string} jobId — UUID of the job
+ * @returns {Promise<{ id: string, profile_id: string, url: string, title: string, company: string|null, location: string|null, has_quick_apply: boolean }>}
+ * @throws {Error} 'job_not_found: <jobId>'
+ */
+export async function getJob(jobId) {
+  if (typeof mockOverrides.getJob === 'function') {
+    return await mockOverrides.getJob(jobId);
+  }
+  if (mockOverrides.getJob !== undefined) {
+    return mockOverrides.getJob;
+  }
+
+  const admin = createSupabaseAdmin();
+  const { data, error } = await admin
+    .from('handshake_jobs')
+    .select('id, profile_id, url, title, company, location, has_quick_apply')
+    .eq('id', jobId)
+    .maybeSingle();
+
+  if (error) throw new Error(`[getJob] ${error.message}`);
+  if (!data) throw new Error(`job_not_found: ${jobId}`);
+
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// 10. updateBrowserProfileHealth
+// ---------------------------------------------------------------------------
+
+/**
+ * Updates or upserts the browser_profiles monitoring row.
+ *
+ * @param {string} profileId — Supabase user UUID
+ * @param {boolean} healthy — session health boolean
+ * @returns {Promise<void>}
+ */
+export async function updateBrowserProfileHealth(profileId, healthy) {
+  if (typeof mockOverrides.updateBrowserProfileHealth === 'function') {
+    return await mockOverrides.updateBrowserProfileHealth(profileId, healthy);
+  }
+  if (mockOverrides.updateBrowserProfileHealth !== undefined) {
+    return;
+  }
+
+  const admin = createSupabaseAdmin();
+  const now = new Date().toISOString();
+  await admin.from('browser_profiles').upsert(
+    {
+      profile_id: profileId,
+      platform: 'handshake',
+      status: healthy ? 'ACTIVE' : 'NEEDS_LOGIN',
+      last_health_check_at: now,
+      updated_at: now,
+    },
+    { onConflict: 'profile_id' }
+  );
+}
+
