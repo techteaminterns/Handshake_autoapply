@@ -97,7 +97,7 @@ export async function sendTelegramMessage(chatId, text, options = {}) {
  * @param {object} [update={}] - Full Telegram Update payload received by the webhook.
  * @returns {Promise<void>} Resolves when the reply processing completes.
  */
-export async function onTelegramReply(chatId, message, update = {}, options = {}) {
+export async function onTelegramReply(chatId, message, _update = {}, options = {}) {
   const text = (message?.text ?? '').trim();
   console.log(`[telegram/webhook] Inbound reply received from chat_id=${chatId}: "${text}"`);
 
@@ -254,7 +254,7 @@ export default async function handler(req, res) {
     let supabase;
     try {
       supabase = createSupabaseAdmin();
-    } catch (err) {
+    } catch (_err) {
       console.error('[telegram/webhook] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
       return res.status(500).json({ error: 'Server configuration error' });
     }

@@ -1,11 +1,10 @@
 const { launchBrowser } = require('../browser/launch');
 const { safeExit } = require('../safeExit');
 const {
-  getResumeUrl,
   getReusableAnswer,
   pauseForLiveHandoff,
   checkAndIncrementActionCount,
-  markRunStatus,
+  markJobStatus,
 } = require('../stubs/sideA');
 
 async function runApplyToJob(jobLink, profileId, runId, existingPage = null) {
@@ -21,7 +20,8 @@ async function runApplyToJob(jobLink, profileId, runId, existingPage = null) {
   }
 
   try {
-    const underCap = await checkAndIncrementActionCount(runId);
+    const targetId = profileId || runId;
+    const underCap = await checkAndIncrementActionCount(targetId);
     if (!underCap) throw new Error('Daily action cap reached');
 
     // Step 1: Navigate to job page automatically
@@ -96,10 +96,10 @@ async function runApplyToJob(jobLink, profileId, runId, existingPage = null) {
     }
     
     console.log('✅ Application submitted successfully');
-    await markRunStatus(runId, 'succeeded');
+    await markJobStatus(runId, 'SUBMITTED', 'verify');
   } catch (err) {
     console.error('[applyToJob] Failed:', err.message);
-    await markRunStatus(runId, 'failed', err.message);
+    await markJobStatus(runId, 'FAILED', err.message).catch(() => {});
     throw err;
   } finally {
     if (browser) {

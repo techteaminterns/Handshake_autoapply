@@ -11,6 +11,7 @@
   },
   "include": [
     "api/**/*",
+    "lib/**/*",
     "*.js"
   ],
   "exclude": [

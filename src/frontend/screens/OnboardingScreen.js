@@ -22,14 +22,15 @@
  * Phase: Phase 1 -- RN onboarding screen (06-implementation.md step 4)
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Switch, ScrollView,
   StyleSheet, Modal, FlatList, ActivityIndicator, Alert, Platform, Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../utils/supabase.js';
-import { API_URL, SUPABASE_URL, TELEGRAM_BOT_USERNAME } from '../config.js';
+import { API_URL, TELEGRAM_BOT_USERNAME } from '../config.js';
 
 // Constants
 const DEGREE_OPTIONS    = ["Associate's", "Bachelor's", "Master's", "MBA", "PhD", "J.D.", "M.D.", "Other"];
@@ -114,7 +115,7 @@ function PickerField({ label, required, value, options, onSelect, error }) {
   );
 }
 
-const EMPTY_DRAFT = {
+export const EMPTY_DRAFT = {
   first_name: '', last_name: '', student_email: '', phone: '',
   school_name: '', major: '', degree_pursuing: null,
   grad_month: null, grad_year: null, school_additional_info: '',
@@ -128,7 +129,7 @@ const EMPTY_DRAFT = {
   resume_storage_path: null, resume_file_name: null, resume_file_size_bytes: null,
 };
 
-function profileToDraft(p) {
+export function profileToDraft(p) {
   if (!p) return { ...EMPTY_DRAFT };
   return {
     ...EMPTY_DRAFT,
@@ -156,17 +157,102 @@ function profileToDraft(p) {
   };
 }
 
+export const getDraftKey = (uid) => uid ? `@onboarding_draft_${uid}` : '@onboarding_draft_anon';
+
+export async function saveDraftToStorage(uid, currentDraft) {
+  try {
+    if (!currentDraft) return;
+    const key = getDraftKey(uid);
+    await AsyncStorage.setItem(key, JSON.stringify(currentDraft));
+  } catch (err) {
+    console.warn('[Onboarding] Failed to save draft to AsyncStorage:', err);
+  }
+}
+
+export async function loadDraftFromStorage(uid) {
+  try {
+    const key = getDraftKey(uid);
+    let saved = await AsyncStorage.getItem(key);
+    if (!saved && uid) {
+      // Fallback check for anonymous draft if user just signed in
+      const anonSaved = await AsyncStorage.getItem('@onboarding_draft_anon');
+      if (anonSaved) {
+        saved = anonSaved;
+        await AsyncStorage.setItem(key, anonSaved);
+        await AsyncStorage.removeItem('@onboarding_draft_anon');
+      }
+    }
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (err) {
+    console.warn('[Onboarding] Failed to load draft from AsyncStorage:', err);
+  }
+  return null;
+}
+
+export async function clearDraftFromStorage(uid) {
+  try {
+    const key = getDraftKey(uid);
+    await AsyncStorage.removeItem(key);
+    if (uid) {
+      await AsyncStorage.removeItem('@onboarding_draft_anon');
+    }
+  } catch (err) {
+    console.warn('[Onboarding] Failed to clear draft from AsyncStorage:', err);
+  }
+}
+
 export default function OnboardingScreen({ userId, accessToken, existingProfile, onProfileSaved, onSignOut }) {
-  const [draft,        setDraft]        = useState(() => profileToDraft(existingProfile));
-  const [errors,       setErrors]       = useState({});
-  const [submitError,  setSubmitError]  = useState(null);
-  const [tgState,      setTgState]      = useState(existingProfile?.telegram_chat_id ? 'linked' : 'unlinked');
-  const [gmailState,   setGmailState]   = useState('disconnected');
-  const [mode,         setMode]         = useState(existingProfile ? 'submitted' : 'editing');
-  const [resumeBusy,   setResumeBusy]   = useState(false);
+  const [draft,            setDraft]           = useState(() => profileToDraft(existingProfile));
+  const [isDraftRestored,  setIsDraftRestored] = useState(false);
+  const [errors,           setErrors]          = useState({});
+  const [submitError,      setSubmitError]     = useState(null);
+  const [tgState,          setTgState]         = useState(existingProfile?.telegram_chat_id ? 'linked' : 'unlinked');
+  const [gmailState,       setGmailState]      = useState('disconnected');
+  const [mode,             setMode]            = useState(existingProfile ? 'submitted' : 'editing');
+  const [resumeBusy,       setResumeBusy]      = useState(false);
+
+  // Restore saved draft on mount if in editing mode and no existing backend profile
+  useEffect(() => {
+    let isMounted = true;
+    async function checkSavedDraft() {
+      if (existingProfile) {
+        if (isMounted) setIsDraftRestored(true);
+        return;
+      }
+      try {
+        const saved = await loadDraftFromStorage(userId);
+        if (saved && isMounted && mode === 'editing') {
+          setDraft(prev => ({
+            ...EMPTY_DRAFT,
+            ...prev,
+            ...saved,
+          }));
+        }
+      } catch (err) {
+        console.warn('[Onboarding] Error checking saved draft:', err);
+      } finally {
+        if (isMounted) {
+          setIsDraftRestored(true);
+        }
+      }
+    }
+    checkSavedDraft();
+    return () => { isMounted = false; };
+  }, [userId, existingProfile, mode]);
+
+  // Keep saved draft in sync with state changes during editing AFTER draft has been restored
+  useEffect(() => {
+    if (!isDraftRestored) return;
+    if (mode === 'editing' && !existingProfile && userId) {
+      saveDraftToStorage(userId, draft);
+    }
+  }, [draft, mode, userId, existingProfile, isDraftRestored]);
 
   const handleCreateNewProfile = async () => {
     try {
+      await clearDraftFromStorage(userId);
       setDraft({ ...EMPTY_DRAFT });
       setErrors({});
       setSubmitError(null);
@@ -279,7 +365,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
           const updatedChatId = payload.new?.telegram_chat_id;
           if (updatedChatId) {
             setTgState('linked');
-            if (onProfileSaved && payload.new) {
+            if (onProfileSaved && payload.new && mode === 'submitted') {
               onProfileSaved(payload.new);
             }
           }
@@ -298,7 +384,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
 
         if (data?.telegram_chat_id) {
           setTgState('linked');
-          if (onProfileSaved && data) {
+          if (onProfileSaved && data && mode === 'submitted') {
             onProfileSaved(data);
           }
         }
@@ -311,7 +397,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, [tgState, userId, onProfileSaved]);
+  }, [tgState, userId, onProfileSaved, mode]);
 
   function set(key, val) {
     setDraft(d => ({ ...d, [key]: val }));
@@ -358,11 +444,14 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     } finally { setResumeBusy(false); }
   }
 
-  function openTelegram() {
+  async function openTelegram() {
     if (!userId) {
       Alert.alert('Error', 'Please sign in first before linking Telegram.');
       return;
     }
+    // Save form data before navigating to Telegram link
+    await saveDraftToStorage(userId, draft);
+
     const botName = (TELEGRAM_BOT || 'simpleclickonetimeusetestbot').replace(/^@/, '');
     const url = `https://t.me/${botName}?start=${encodeURIComponent(userId)}`;
     Linking.openURL(url).catch(err => {
@@ -371,7 +460,9 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     setTgState('pending');
   }
 
-  function openGmailOAuth() {
+  async function openGmailOAuth() {
+    // Save form data before navigating to Gmail OAuth
+    await saveDraftToStorage(userId, draft);
     setGmailState('pending');
     const url = `${API_URL}/api/oauth/gmail/start?access_token=${encodeURIComponent(accessToken)}`;
     Linking.openURL(url).catch(() => setGmailState('error'));
@@ -429,17 +520,36 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       resume_file_size_bytes: draft.resume_file_size_bytes,
     };
     try {
+      console.log('[OnboardingScreen] Submitting onboarding profile payload to /api/onboarding...');
       const res  = await fetch(`${API_URL}/api/onboarding`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body: JSON.stringify(payload),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Submission failed.');
-      const { data: saved } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      if (onProfileSaved && saved) onProfileSaved(saved);
+      if (!res.ok) {
+        console.error(`[OnboardingScreen] /api/onboarding returned error status ${res.status}:`, json);
+        throw new Error(json.error ?? `Submission failed (${res.status}).`);
+      }
+      console.log('[OnboardingScreen] /api/onboarding succeeded (200):', json);
+
+      // Clear saved draft only on successful form submission
+      await clearDraftFromStorage(userId);
+
+      // Retrieve saved profile record from Supabase with safe fallback
+      let { data: saved, error: fetchErr } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+      if (fetchErr || !saved) {
+        console.warn('[OnboardingScreen] Profile fetch error or empty, using payload fallback:', fetchErr?.message);
+        saved = { ...payload, id: userId, created_at: new Date().toISOString() };
+      }
+
+      console.log('[OnboardingScreen:533] onProfileSaved firing with profile:', saved);
+      if (onProfileSaved && saved) {
+        onProfileSaved(saved);
+      }
       setMode('submitted');
     } catch (err) {
+      console.error('[OnboardingScreen] Submission failure:', err.message || err);
       setSubmitError(err.message || 'Submission failed.');
       setMode('editing');
     }

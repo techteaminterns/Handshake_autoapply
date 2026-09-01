@@ -18,6 +18,15 @@
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
+const dotenv = require('dotenv');
+
+// Load environment variables in priority order
+dotenv.config({ path: path.resolve(__dirname, '../../.env.test') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env.development.local') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
 const { launchBrowser } = require('../src/browser/launch');
 const { safeExit } = require('../src/safeExit');
 const { runManualGuidedLogin, runOnboardingAutofill } = require('../src/flows/manualGuidedLogin');
@@ -116,7 +125,7 @@ async function main() {
 
     // 4. Call detectPageState() after signin
     console.log('[STEP 4/6] Detecting post-login page state...');
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
     const state = await detectPageState(page, 10000);
     console.log(`   ✓ Page detection result: "${state}" [SUCCESS]\n`);
 
@@ -129,7 +138,8 @@ async function main() {
         mobileNumber: defaultProfile.phone || 'N/A'
       });
       console.log('   ✓ Onboarding autofill completed. Waiting for dashboard navigation...');
-      await page.waitForTimeout(5000);
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await page.waitForTimeout(1000);
       console.log(`   ✓ Redirecting to Mock Handshake job page: ${MOCK_JOB_URL}...`);
       await page.goto(MOCK_JOB_URL, { waitUntil: 'networkidle' });
     } else {

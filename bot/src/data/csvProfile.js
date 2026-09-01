@@ -27,7 +27,7 @@ function parseCsvLine(line) {
   return values;
 }
 
-function readLatestProfile(csvFile = path.join(__dirname, '../../data/profile.csv')) {
+function readLatestProfile(csvFile = process.env.BOT_PROFILE_CSV || path.join(__dirname, '../../data/profile.csv')) {
   if (!fs.existsSync(csvFile)) {
     throw new Error(`Profile CSV not found: ${csvFile}`);
   }

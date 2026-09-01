@@ -48,13 +48,8 @@ module.exports = ({ config }) => {
       SUPABASE_URL: supabaseUrl,
       SUPABASE_ANON_KEY: supabaseAnonKey,
       SUPABASE_PUBLISHABLE_KEY: supabasePublishableKey,
-      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
-      SUPABASE_ACCESS_TOKEN: process.env.SUPABASE_ACCESS_TOKEN || '',
-      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
-      TELEGRAM_BOT_USERNAME: process.env.TELEGRAM_BOT_USERNAME || 'simpleclickonetimeusetestbot',
-      GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
-      GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
-      ENCRYPTION_KEY: process.env.ENCRYPTION_KEY || '',
+      TELEGRAM_BOT_USERNAME: process.env.TELEGRAM_BOT_USERNAME || process.env.EXPO_PUBLIC_TELEGRAM_BOT_USERNAME || 'simpleclickonetimeusetestbot',
+      GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID || '',
     },
   };
 };

@@ -15,14 +15,13 @@
  * Phase: Phase V1-A3 (04-ui-ux.md, 05-backend-schema.md, 06-implementation.md)
  */
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
   ScrollView,
-  FlatList,
   Modal,
   ActivityIndicator,
   StyleSheet,
@@ -328,7 +327,7 @@ export function InterventionPopup({ intervention, accessToken, onResolved }) {
 export default function MonitoringScreen({
   userId,
   accessToken,
-  profile,
+  profile: _profile,
   onEditProfile,
   onSignOut,
 }) {
@@ -341,14 +340,15 @@ export default function MonitoringScreen({
 
   // 1. Elapsed timer ticker (1s interval)
   useEffect(() => {
+    console.log('[MonitoringScreen] Mounted with userId:', userId, 'profile:', _profile?.id);
     const timer = setInterval(() => {
       setTicker((t) => (t + 1) % 1000000);
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [userId, _profile?.id]);
 
   // 2. Initial Data Fetch
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!userId || !accessToken) return;
     try {
       // (a) Applications
@@ -393,11 +393,11 @@ export default function MonitoringScreen({
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId, accessToken]);
 
   useEffect(() => {
     fetchData();
-  }, [userId, accessToken]);
+  }, [fetchData]);
 
   // 3. Supabase Realtime Subscriptions
   useEffect(() => {
@@ -475,7 +475,7 @@ export default function MonitoringScreen({
       supabase.removeChannel(jobsChannel);
       supabase.removeChannel(bpChannel);
     };
-  }, [userId]);
+  }, [userId, fetchData]);
 
   // 4. Derived State Computation
   const activeApp = useMemo(() => {
@@ -522,13 +522,19 @@ export default function MonitoringScreen({
       <InterventionPopup
         intervention={intervention}
         accessToken={accessToken}
-        onResolved={(id) => {
+        onResolved={(_id) => {
           setIntervention(null);
           fetchData();
         }}
       />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {loading ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.loadingLabel}>Loading monitoring data…</Text>
+          </View>
+        ) : null}
         {/* ── Header Strip ───────────────────────────────────────────────────── */}
         <View style={styles.headerStrip}>
           <View>
@@ -600,7 +606,7 @@ export default function MonitoringScreen({
           <View style={styles.activeJobSection}>
             <View style={styles.activeJobHeader}>
               <Text style={styles.activeJobBadge}>NOW APPLYING</Text>
-              <Text style={styles.elapsedText}>⏱ {formatElapsed(activeApp.started_at || activeApp.queued_at)}</Text>
+              <Text key={ticker} style={styles.elapsedText}>⏱ {formatElapsed(activeApp.started_at || activeApp.queued_at)}</Text>
             </View>
 
             <Text style={styles.activeJobTitle}>{activeApp.title || 'Handshake Job'}</Text>
@@ -740,6 +746,16 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 40,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  loadingLabel: {
+    fontSize: 14,
+    color: '#64748b',
   },
 
   // Header Strip

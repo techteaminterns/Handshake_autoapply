@@ -97,17 +97,23 @@ export default function App() {
         );
     }
 
+    const isMonitoring = Boolean(profile && viewMode === 'monitoring');
+    console.log(`[App.tsx:104] Authenticated view decision: hasSession=${!!session}, profileId=${profile?.id ?? 'none'}, viewMode=${viewMode} -> rendering ${isMonitoring ? 'MonitoringScreen' : 'OnboardingScreen'}`);
+
     return (
         <View style={styles.container}>
             <StatusBar style="auto" />
             {session ? (
-                profile && viewMode === 'monitoring' ? (
+                isMonitoring ? (
                     <MonitoringScreen
                         key={session.user.id}
                         userId={session.user.id}
                         accessToken={session.access_token}
                         profile={profile}
-                        onEditProfile={() => setViewMode('onboarding')}
+                        onEditProfile={() => {
+                            console.log('[App.tsx] Edit profile clicked -> switching viewMode to onboarding');
+                            setViewMode('onboarding');
+                        }}
                         onSignOut={handleSignOut}
                     />
                 ) : (
@@ -117,6 +123,7 @@ export default function App() {
                         accessToken={session.access_token}
                         existingProfile={profile}
                         onProfileSaved={(saved: any) => {
+                            console.log('[App.tsx:120] onProfileSaved received profile:', saved?.id, 'switching viewMode to monitoring');
                             setProfile(saved);
                             setViewMode('monitoring');
                         }}
