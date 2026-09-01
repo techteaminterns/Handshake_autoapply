@@ -25,12 +25,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Switch, ScrollView,
-  StyleSheet, Modal, FlatList, ActivityIndicator, Alert, Platform, Linking,
+  StyleSheet, Modal, FlatList, ActivityIndicator, Alert, Platform, Linking, Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../utils/supabase.js';
 import { API_URL, TELEGRAM_BOT_USERNAME } from '../config.js';
+import { extractTextFromPdf, parseResumeText } from '../utils/resumeParser.js';
 
 // Constants
 const DEGREE_OPTIONS    = ["Associate's", "Bachelor's", "Master's", "MBA", "PhD", "J.D.", "M.D.", "Other"];
@@ -126,6 +127,7 @@ export const EMPTY_DRAFT = {
   has_existing_handshake_account: null,
   handshake_email: '',
   handshake_password: '',
+  whatsapp_phone: '',
   resume_storage_path: null, resume_file_name: null, resume_file_size_bytes: null,
 };
 
@@ -151,6 +153,7 @@ export function profileToDraft(p) {
     has_existing_handshake_account: p.has_existing_handshake_account ?? null,
     handshake_email: p.handshake_email ?? '',
     handshake_password: '',
+    whatsapp_phone: p.whatsapp_phone ?? '',
     resume_storage_path:  null,
     resume_file_name:     null,
     resume_file_size_bytes: null,
@@ -209,9 +212,15 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   const [errors,           setErrors]          = useState({});
   const [submitError,      setSubmitError]     = useState(null);
   const [tgState,          setTgState]         = useState(existingProfile?.telegram_chat_id ? 'linked' : 'unlinked');
+  const [waState,          setWaState]         = useState(existingProfile?.whatsapp_phone ? 'linked' : 'unlinked');
+  const [waPhone,          setWaPhone]         = useState(existingProfile?.whatsapp_phone || '');
+  const [waQrDataUrl,      setWaQrDataUrl]     = useState(null);
+  const [waModalOpen,      setWaModalOpen]     = useState(false);
+  const [waLoading,        setWaLoading]       = useState(false);
   const [gmailState,       setGmailState]      = useState('disconnected');
   const [mode,             setMode]            = useState(existingProfile ? 'submitted' : 'editing');
   const [resumeBusy,       setResumeBusy]      = useState(false);
+  const [parseNotice,      setParseNotice]     = useState(null);
 
   // Restore saved draft on mount if in editing mode and no existing backend profile
   useEffect(() => {
@@ -257,9 +266,14 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       setErrors({});
       setSubmitError(null);
       setTgState('unlinked');
+      setWaState('unlinked');
+      setWaPhone('');
+      setWaQrDataUrl(null);
+      setWaModalOpen(false);
       setGmailState('disconnected');
       setMode('editing');
       setResumeBusy(false);
+      setParseNotice(null);
 
       if (onProfileSaved) {
         onProfileSaved(null);
@@ -335,6 +349,14 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     }
   }, [existingProfile?.telegram_chat_id]);
 
+  // Sync whatsapp link status whenever the parent passes a fresh profile.
+  useEffect(() => {
+    if (existingProfile?.whatsapp_phone) {
+      setWaState('linked');
+      setWaPhone(existingProfile.whatsapp_phone);
+    }
+  }, [existingProfile?.whatsapp_phone]);
+
   // Sync mode when App.tsx delivers the profile after the initial render.
   // Without this, a user who has already submitted stays in 'editing' until
   // they manually interact, which could trigger a spurious API call.
@@ -399,6 +421,90 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     };
   }, [tgState, userId, onProfileSaved, mode]);
 
+  // Realtime subscription + polling for whatsapp_phone
+  useEffect(() => {
+    if (!userId || waState === 'linked') return;
+
+    const channel = supabase
+      .channel(`realtime:profiles_whatsapp:${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${userId}`,
+        },
+        (payload) => {
+          const updatedPhone = payload.new?.whatsapp_phone;
+          if (updatedPhone) {
+            setWaState('linked');
+            setWaPhone(updatedPhone);
+            setDraft(prev => ({ ...prev, whatsapp_phone: updatedPhone }));
+            if (onProfileSaved && payload.new && mode === 'submitted') {
+              onProfileSaved(payload.new);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .maybeSingle();
+
+        if (data?.whatsapp_phone) {
+          setWaState('linked');
+          setWaPhone(data.whatsapp_phone);
+          setDraft(prev => ({ ...prev, whatsapp_phone: data.whatsapp_phone }));
+          if (onProfileSaved && data && mode === 'submitted') {
+            onProfileSaved(data);
+          }
+        }
+      } catch (err) {
+        console.warn('[Onboarding] whatsapp check error:', err);
+      }
+    }, waModalOpen ? 2000 : 5000);
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [waState, waModalOpen, userId, onProfileSaved, mode]);
+
+  // Polling loop while WhatsApp QR modal is open
+  useEffect(() => {
+    if (!waModalOpen || waState === 'linked' || !userId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/whatsapp/status?user_id=${encodeURIComponent(userId)}`, {
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+        });
+        const json = await res.json();
+        if (json.phone || json.status === 'connected') {
+          setWaState('linked');
+          setWaPhone(json.phone || '');
+          if (json.phone) {
+            setDraft(prev => ({ ...prev, whatsapp_phone: json.phone }));
+          }
+          setWaLoading(false);
+        } else if (json.qr_data_url) {
+          setWaQrDataUrl(json.qr_data_url);
+          setWaLoading(false);
+        }
+      } catch (err) {
+        console.warn('[Onboarding] WhatsApp modal polling error:', err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [waModalOpen, waState, userId, accessToken]);
+
   function set(key, val) {
     setDraft(d => ({ ...d, [key]: val }));
     setErrors(e => { const n = { ...e }; delete n[key]; return n; });
@@ -425,20 +531,93 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     }
     setErrors(e => { const n = { ...e }; delete n.resume; return n; });
     setResumeBusy(true);
+    setParseNotice(null);
     try {
       let uploadBody;
+      let parseSource;
       if (file.file) {
         uploadBody = file.file;
+        parseSource = file.file;
       } else {
         const response = await fetch(file.uri);
         uploadBody = await response.blob();
+        parseSource = uploadBody;
       }
       const storagePath = `${userId}/${Date.now()}.pdf`;
       const { error: upErr } = await supabase.storage.from('resumes').upload(storagePath, uploadBody, { contentType: 'application/pdf', upsert: true });
       if (upErr) throw upErr;
-      set('resume_storage_path',  storagePath);
-      set('resume_file_name',     file.name);
-      set('resume_file_size_bytes', file.size ?? uploadBody.size ?? 0);
+
+      // Extract text and parse entities from resume PDF
+      let parsed = {};
+      let extractedCount = 0;
+      try {
+        const rawText = await extractTextFromPdf(parseSource || file.uri);
+        if (rawText && rawText.trim()) {
+          parsed = parseResumeText(rawText);
+        }
+      } catch (parseErr) {
+        console.warn('[OnboardingScreen] PDF text parsing error (non-fatal):', parseErr);
+      }
+
+      setDraft(prev => {
+        const updated = {
+          ...prev,
+          resume_storage_path:   storagePath,
+          resume_file_name:      file.name,
+          resume_file_size_bytes: file.size ?? uploadBody.size ?? 0,
+        };
+
+        if (parsed.first_name) { updated.first_name = parsed.first_name; extractedCount++; }
+        if (parsed.last_name)  { updated.last_name = parsed.last_name; extractedCount++; }
+        if (parsed.student_email) {
+          updated.student_email = parsed.student_email;
+          extractedCount++;
+          if (updated.has_existing_handshake_account && !updated.handshake_email) {
+            updated.handshake_email = parsed.student_email;
+          }
+        }
+        if (parsed.phone) { updated.phone = parsed.phone; extractedCount++; }
+        if (parsed.school_name) { updated.school_name = parsed.school_name; extractedCount++; }
+        if (parsed.major) { updated.major = parsed.major; extractedCount++; }
+        if (parsed.degree_pursuing) { updated.degree_pursuing = parsed.degree_pursuing; extractedCount++; }
+        if (parsed.grad_month) { updated.grad_month = parsed.grad_month; }
+        if (parsed.grad_year) { updated.grad_year = parsed.grad_year; }
+        if (parsed.job_interests && !prev.job_interests) {
+          updated.job_interests = parsed.job_interests;
+        }
+        if (parsed.job_types?.length && (!prev.job_types || prev.job_types.length === 0)) {
+          updated.job_types = parsed.job_types;
+        }
+        return updated;
+      });
+
+      // Clear validation errors for any fields that were populated
+      setErrors(prev => {
+        const nextErrs = { ...prev };
+        delete nextErrs.resume;
+        if (parsed.first_name) delete nextErrs.first_name;
+        if (parsed.last_name) delete nextErrs.last_name;
+        if (parsed.student_email) delete nextErrs.student_email;
+        if (parsed.phone) delete nextErrs.phone;
+        if (parsed.school_name) delete nextErrs.school_name;
+        if (parsed.major) delete nextErrs.major;
+        if (parsed.degree_pursuing) delete nextErrs.degree_pursuing;
+        if (parsed.grad_month) delete nextErrs.grad_month;
+        if (parsed.grad_year) delete nextErrs.grad_year;
+        return nextErrs;
+      });
+
+      if (extractedCount > 0) {
+        setParseNotice({
+          type: 'success',
+          message: '✓ Resume parsed! Fields below have been auto-populated. You can review and edit them before submitting.',
+        });
+      } else {
+        setParseNotice({
+          type: 'info',
+          message: 'Resume uploaded. Could not automatically extract text — please fill in your details below.',
+        });
+      }
     } catch (err) {
       setErrors(e => ({ ...e, resume: `Upload failed: ${err.message}` }));
     } finally { setResumeBusy(false); }
@@ -458,6 +637,40 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       console.warn('[Onboarding] openTelegram error:', err);
     });
     setTgState('pending');
+  }
+
+  async function openWhatsAppModal() {
+    if (!userId) {
+      Alert.alert('Error', 'Please sign in first before linking WhatsApp.');
+      return;
+    }
+    await saveDraftToStorage(userId, draft);
+    setWaModalOpen(true);
+    setWaLoading(true);
+    setWaQrDataUrl(null);
+
+    try {
+      const res = await fetch(`${API_URL}/api/whatsapp/link?user_id=${encodeURIComponent(userId)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      const json = await res.json();
+      if (json.phone || json.status === 'connected') {
+        setWaState('linked');
+        setWaPhone(json.phone || '');
+        setWaLoading(false);
+      } else if (json.qr_data_url) {
+        setWaQrDataUrl(json.qr_data_url);
+        setWaLoading(false);
+      }
+    } catch (err) {
+      console.warn('[Onboarding] openWhatsAppModal link error:', err);
+      setWaLoading(false);
+    }
   }
 
   async function openGmailOAuth() {
@@ -516,6 +729,7 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       has_existing_handshake_account: draft.has_existing_handshake_account,
       handshake_email: draft.has_existing_handshake_account ? (draft.handshake_email?.trim().toLowerCase() || null) : null,
       handshake_password: draft.has_existing_handshake_account ? (draft.handshake_password || null) : null,
+      ...(draft.whatsapp_phone ? { whatsapp_phone: draft.whatsapp_phone.trim() } : {}),
       resume_storage_path:   draft.resume_storage_path,
       resume_file_size_bytes: draft.resume_file_size_bytes,
     };
@@ -583,6 +797,12 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
           : <TouchableOpacity style={s.smallBtn} onPress={openTelegram}><Text style={s.smallBtnTxt}>Link Telegram</Text></TouchableOpacity>}
         </View>
         <View style={s.recapAction}>
+          <Text style={s.recapLabel}>WhatsApp</Text>
+          {waState==='linked'  ? <Text style={s.badge}>Linked ({waPhone || draft.whatsapp_phone || draft.phone}) ✓</Text>
+          :waState==='pending' ? <ActivityIndicator size="small" color="#2563eb" />
+          : <TouchableOpacity style={s.smallBtn} onPress={openWhatsAppModal}><Text style={s.smallBtnTxt}>Link WhatsApp</Text></TouchableOpacity>}
+        </View>
+        <View style={s.recapAction}>
           <Text style={s.recapLabel}>Gmail (readonly)</Text>
           {gmailState==='connected' ? <Text style={s.badge}>Connected (readonly) ✓</Text>
           :gmailState==='pending'   ? <ActivityIndicator size="small" color="#2563eb" />
@@ -596,6 +816,51 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
             <Text style={s.btnTxt}>Create New Profile</Text>
           </TouchableOpacity>
         </View>
+
+        {/* WhatsApp QR Modal */}
+        <Modal visible={waModalOpen} transparent animationType="fade" onRequestClose={() => setWaModalOpen(false)}>
+          <TouchableOpacity style={s.overlayCenter} activeOpacity={1} onPress={() => setWaModalOpen(false)}>
+            <TouchableOpacity style={s.qrModalCard} activeOpacity={1} onPress={() => {}}>
+              <Text style={s.qrModalTitle}>Link WhatsApp</Text>
+              <Text style={s.qrModalSubtitle}>Scan the QR code below to connect your WhatsApp account with OneClickHandshake.</Text>
+
+              <View style={s.qrInstructionBox}>
+                <Text style={s.qrInstructionStep}>1. Open <Text style={{fontWeight: '700'}}>WhatsApp</Text> on your phone</Text>
+                <Text style={s.qrInstructionStep}>2. Tap <Text style={{fontWeight: '700'}}>Settings</Text> &gt; <Text style={{fontWeight: '700'}}>Linked Devices</Text></Text>
+                <Text style={s.qrInstructionStep}>3. Tap <Text style={{fontWeight: '700'}}>Link a Device</Text> and scan this code</Text>
+              </View>
+
+              <View style={s.qrContainer}>
+                {waLoading ? (
+                  <View style={s.qrLoadingBox}>
+                    <ActivityIndicator size="large" color="#2563eb" />
+                    <Text style={s.qrLoadingText}>Generating WhatsApp QR code...</Text>
+                  </View>
+                ) : waState === 'linked' ? (
+                  <View style={s.qrSuccessBox}>
+                    <Text style={s.qrSuccessTitle}>✓ WhatsApp Linked!</Text>
+                    <Text style={s.qrSuccessSubtitle}>{waPhone ? `Connected as ${waPhone}` : 'Device linked successfully.'}</Text>
+                  </View>
+                ) : waQrDataUrl ? (
+                  <Image
+                    source={{ uri: waQrDataUrl }}
+                    style={s.qrImage}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View style={s.qrLoadingBox}>
+                    <ActivityIndicator size="large" color="#2563eb" />
+                    <Text style={s.qrLoadingText}>Awaiting QR code...</Text>
+                  </View>
+                )}
+              </View>
+
+              <TouchableOpacity style={[s.btn, s.qrCloseBtn]} onPress={() => setWaModalOpen(false)}>
+                <Text style={s.btnTxt}>{waState === 'linked' ? 'Done' : 'Close'}</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
       </ScrollView>
     );
   }
@@ -603,7 +868,28 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   return (
     <ScrollView style={s.container} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
       <Text style={s.title}>{existingProfile ? 'Edit Profile' : 'Your Profile'}</Text>
-      <Text style={s.subtitle}>Fill in your details so the bot can apply on your behalf.</Text>
+      <Text style={s.subtitle}>Upload your resume to automatically pre-fill your details below, or enter them manually.</Text>
+
+      <SectionHeader title="Resume (Auto-fill)" />
+      <FieldLabel label="Upload resume (PDF, max 1 MB)" required />
+      <Text style={s.helper}>Upload your PDF resume to auto-fill your contact info, academic details, and skills below.</Text>
+      {draft.resume_file_name
+        ? <View style={s.resumeRow}>
+            <Text style={s.resumeName} numberOfLines={1}>{draft.resume_file_name}</Text>
+            <TouchableOpacity onPress={pickResume}><Text style={s.changeLink}>Change</Text></TouchableOpacity>
+          </View>
+        : <TouchableOpacity style={[s.uploadBtn, errors.resume&&s.fieldError]} onPress={pickResume} disabled={resumeBusy}>
+            {resumeBusy ? <ActivityIndicator size="small" color="#2563eb" /> : <Text style={s.uploadBtnTxt}>Choose PDF file to Auto-Fill</Text>}
+          </TouchableOpacity>
+      }
+      <ErrorText message={errors.resume} />
+      {parseNotice && (
+        <View style={parseNotice.type === 'success' ? s.parseBannerSuccess : s.parseBannerInfo}>
+          <Text style={parseNotice.type === 'success' ? s.parseBannerTextSuccess : s.parseBannerTextInfo}>
+            {parseNotice.message}
+          </Text>
+        </View>
+      )}
 
       <SectionHeader title="Identity" />
       <FieldLabel label="First name" required />
@@ -655,24 +941,17 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
         <Switch value={draft.job_alerts_opt_in} onValueChange={v=>set('job_alerts_opt_in',v)} trackColor={{ true: '#2563eb' }} />
       </View>
 
-      <SectionHeader title="Resume" />
-      <FieldLabel label="Upload resume (PDF, max 1 MB)" required />
-      {draft.resume_file_name
-        ? <View style={s.resumeRow}>
-            <Text style={s.resumeName} numberOfLines={1}>{draft.resume_file_name}</Text>
-            <TouchableOpacity onPress={pickResume}><Text style={s.changeLink}>Change</Text></TouchableOpacity>
-          </View>
-        : <TouchableOpacity style={[s.uploadBtn, errors.resume&&s.fieldError]} onPress={pickResume} disabled={resumeBusy}>
-            {resumeBusy ? <ActivityIndicator size="small" color="#2563eb" /> : <Text style={s.uploadBtnTxt}>Choose PDF file</Text>}
-          </TouchableOpacity>
-      }
-      <ErrorText message={errors.resume} />
-
       <SectionHeader title="Telegram" />
       <Text style={s.helper}>Link Telegram to receive bot notifications and answer questions during a run.</Text>
       {tgState==='linked'  ? <Text style={s.badge}>Telegram linked ✓</Text>
       :tgState==='pending' ? <View style={s.pendingRow}><ActivityIndicator size="small" color="#2563eb" /><Text style={s.pendingTxt}>Waiting for link...</Text></View>
       : <TouchableOpacity style={s.btn} onPress={openTelegram}><Text style={s.btnTxt}>Link Telegram</Text></TouchableOpacity>}
+
+      <SectionHeader title="WhatsApp" />
+      <Text style={s.helper}>Link WhatsApp to receive job confirmation alerts and reply YES/NO directly from your WhatsApp chat.</Text>
+      {waState==='linked'  ? <Text style={s.badge}>WhatsApp linked ({waPhone || draft.whatsapp_phone || draft.phone}) ✓</Text>
+      :waState==='pending' ? <View style={s.pendingRow}><ActivityIndicator size="small" color="#2563eb" /><Text style={s.pendingTxt}>Connecting...</Text></View>
+      : <TouchableOpacity style={s.btn} onPress={openWhatsAppModal}><Text style={s.btnTxt}>Link WhatsApp</Text></TouchableOpacity>}
 
       <SectionHeader title="Handshake Account" />
       <FieldLabel label="Do you have an existing Handshake account?" required />
@@ -747,6 +1026,51 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
           <Text style={s.cancelTxt}>Cancel</Text>
         </TouchableOpacity>
       )}
+
+      {/* WhatsApp QR Modal */}
+      <Modal visible={waModalOpen} transparent animationType="fade" onRequestClose={() => setWaModalOpen(false)}>
+        <TouchableOpacity style={s.overlayCenter} activeOpacity={1} onPress={() => setWaModalOpen(false)}>
+          <TouchableOpacity style={s.qrModalCard} activeOpacity={1} onPress={() => {}}>
+            <Text style={s.qrModalTitle}>Link WhatsApp</Text>
+            <Text style={s.qrModalSubtitle}>Scan the QR code below to connect your WhatsApp account with OneClickHandshake.</Text>
+
+            <View style={s.qrInstructionBox}>
+              <Text style={s.qrInstructionStep}>1. Open <Text style={{fontWeight: '700'}}>WhatsApp</Text> on your phone</Text>
+              <Text style={s.qrInstructionStep}>2. Tap <Text style={{fontWeight: '700'}}>Settings</Text> &gt; <Text style={{fontWeight: '700'}}>Linked Devices</Text></Text>
+              <Text style={s.qrInstructionStep}>3. Tap <Text style={{fontWeight: '700'}}>Link a Device</Text> and scan this code</Text>
+            </View>
+
+            <View style={s.qrContainer}>
+              {waLoading ? (
+                <View style={s.qrLoadingBox}>
+                  <ActivityIndicator size="large" color="#2563eb" />
+                  <Text style={s.qrLoadingText}>Generating WhatsApp QR code...</Text>
+                </View>
+              ) : waState === 'linked' ? (
+                <View style={s.qrSuccessBox}>
+                  <Text style={s.qrSuccessTitle}>✓ WhatsApp Linked!</Text>
+                  <Text style={s.qrSuccessSubtitle}>{waPhone ? `Connected as ${waPhone}` : 'Device linked successfully.'}</Text>
+                </View>
+              ) : waQrDataUrl ? (
+                <Image
+                  source={{ uri: waQrDataUrl }}
+                  style={s.qrImage}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={s.qrLoadingBox}>
+                  <ActivityIndicator size="large" color="#2563eb" />
+                  <Text style={s.qrLoadingText}>Awaiting QR code...</Text>
+                </View>
+              )}
+            </View>
+
+            <TouchableOpacity style={[s.btn, s.qrCloseBtn]} onPress={() => setWaModalOpen(false)}>
+              <Text style={s.btnTxt}>{waState === 'linked' ? 'Done' : 'Close'}</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </ScrollView>
   );
 }
@@ -773,6 +1097,7 @@ const s = StyleSheet.create({
   pickerPlaceholder: { fontSize: 15, color: '#9ca3af' },
   chevron:     { fontSize: 12, color: GRAY },
   overlay:     { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  overlayCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 16 },
   sheet:       { backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '60%', paddingBottom: 32 },
   sheetTitle:  { fontSize: 16, fontWeight: '700', color: '#111', padding: 16, borderBottomWidth: 1, borderBottomColor: BORDER },
   sheetOpt:    { paddingVertical: 14, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
@@ -816,4 +1141,23 @@ const s = StyleSheet.create({
   recapLabel:  { flex: 1, fontSize: 14, color: GRAY, fontWeight: '500' },
   recapVal:    { flex: 2, fontSize: 14, color: '#111', textAlign: 'right' },
   recapAction: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: BORDER },
+  parseBannerSuccess: { backgroundColor: '#f0fdf4', borderColor: '#86efac', borderWidth: 1, borderRadius: 8, padding: 12, marginTop: 10, marginBottom: 6 },
+  parseBannerInfo:    { backgroundColor: '#eff6ff', borderColor: '#bfdbfe', borderWidth: 1, borderRadius: 8, padding: 12, marginTop: 10, marginBottom: 6 },
+  parseBannerTextSuccess: { color: '#15803d', fontSize: 13, fontWeight: '500', lineHeight: 18 },
+  parseBannerTextInfo:    { color: '#1d4ed8', fontSize: 13, fontWeight: '500', lineHeight: 18 },
+
+  // WhatsApp QR Modal styles
+  qrModalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 8 },
+  qrModalTitle: { fontSize: 20, fontWeight: '700', color: '#111', marginBottom: 6 },
+  qrModalSubtitle: { fontSize: 13, color: GRAY, textAlign: 'center', marginBottom: 14, lineHeight: 18 },
+  qrInstructionBox: { backgroundColor: '#f8fafc', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 12, width: '100%', marginBottom: 14 },
+  qrInstructionStep: { fontSize: 12, color: '#334155', lineHeight: 18 },
+  qrContainer: { width: 220, height: 220, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: BORDER, borderRadius: 12, backgroundColor: '#fff', marginBottom: 16, overflow: 'hidden' },
+  qrImage: { width: 210, height: 210 },
+  qrLoadingBox: { alignItems: 'center', justifyContent: 'center', padding: 16 },
+  qrLoadingText: { fontSize: 13, color: GRAY, marginTop: 10, textAlign: 'center' },
+  qrSuccessBox: { alignItems: 'center', justifyContent: 'center', padding: 16 },
+  qrSuccessTitle: { fontSize: 18, fontWeight: '700', color: '#16a34a', marginBottom: 6 },
+  qrSuccessSubtitle: { fontSize: 14, color: GRAY, textAlign: 'center' },
+  qrCloseBtn: { width: '100%', marginTop: 0 },
 });

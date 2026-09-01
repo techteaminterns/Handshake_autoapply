@@ -38,6 +38,13 @@ bot/bot-state.json
 bot/captured_details.csv
 bot/data/profile.csv
 bot/.env
+bot/debug-onboarding.png
+bot/test-resume.pdf
+signup.png
+
+# WhatsApp Baileys session storage (never commit private keys)
+sessions/
+sessions/**
 
 # Local scratch scripts
 test-tele.js

@@ -236,6 +236,7 @@ export default async function handler(req, res) {
     job_alerts_opt_in:                body.job_alerts_opt_in !== false,
     has_existing_handshake_account:   hasAccount,
     handshake_email:                  hasAccount ? body.handshake_email.trim().toLowerCase() : null,
+    ...(body.whatsapp_phone ? { whatsapp_phone: body.whatsapp_phone.trim() } : {}),
   };
 
   const { error: profileError } = await supabase
