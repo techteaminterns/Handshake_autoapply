@@ -5,11 +5,13 @@
     "googleapis": "^140.0.0"
   },
   "scripts": {
-    "lint": "eslint api lib",
+    "lint": "eslint api lib worker",
     "typecheck": "tsc --noEmit",
     "validate": "node scripts/validate-api.mjs",
     "test:schema": "supabase db reset --local",
-    "test-tele": "node test-tele.js"
+    "test-tele": "node test-tele.js",
+    "worker": "node worker/index.js",
+    "test:worker": "node worker/test-a6-harness.js"
   },
   "type": "module",
   "devDependencies": {

@@ -7,6 +7,7 @@
 - Ask if ambiguous — do not guess at Handshake selectors, field mappings, or DB queries; check `03-workflow.md` / `05-backend-schema.md` first, ask if still unclear.
 - Update docs (README/docstrings) as part of finishing each slice, before moving to the next phase.
 - Update STATE.md at every commit — fill Current Phase, Last Commit Summary, and Next Action before pushing.
+- Never add or commit or push github cicd workflows.
 
 ## Code Generation Tools
 - Cursor Pro and Antigravity CLI (agy) are both approved code generation tools. Use Plan mode first in both, Agent mode only after reviewing diff.

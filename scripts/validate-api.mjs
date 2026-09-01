@@ -20,7 +20,7 @@ function collectJsFiles(dir) {
   return files;
 }
 
-const targets = ['api', 'lib'].flatMap((dir) => collectJsFiles(join(ROOT, dir)));
+const targets = ['api', 'lib', 'worker'].flatMap((dir) => collectJsFiles(join(ROOT, dir)));
 
 for (const file of targets) {
   execSync(`node --check "${file}"`, { stdio: 'inherit' });
