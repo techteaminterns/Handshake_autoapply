@@ -5,8 +5,8 @@
 2. User completes onboarding → all fields + resume + Telegram link stored to Supabase
 3. User reaches monitoring UI → bot status visible
 4. Bot signs into Handshake (sign-up flow for new users, sign-in for existing)
-5. Bot scrapes jobs daily → sends Telegram yes/no per job
-6. User replies yes/no in Telegram
+5. Bot scrapes jobs daily → sends Telegram prompt with inline Yes/No buttons per job
+6. User taps Yes/No button in Telegram
 7. Bot picks approved jobs from queue → applies sequentially
 8. Interventions (OTP, confirmation, unknown questions) surface as popups in monitoring UI
 9. User resolves popup → bot continues
@@ -47,9 +47,9 @@
 1. Worker triggers `runScrape` with profile preferences (job types, locations, interests)
 2. Bot scrapes Handshake jobs page filtered by preferences
 3. New jobs stored to `handshake_jobs` (deduplicated by URL)
-4. For each new job: worker sends Telegram message "Do you want to apply to [title] at [company]? [url]"
-5. User replies yes → application row created as APPROVED+QUEUED
-6. User replies no → application row created as REJECTED (permanent)
+4. For each new job: worker sends Telegram prompt "Apply to [title] at [company]? [url]" with inline Yes/No buttons
+5. User taps Yes → application row created as APPROVED+QUEUED
+6. User taps No → application row created as REJECTED (permanent)
 
 **Apply flow**
 1. Worker calls `claimNextJob` → atomically claims one APPROVED+QUEUED application
@@ -77,7 +77,7 @@
 - Telegram /start → `/api/telegram/webhook` → profiles.telegram_chat_id update
 - Worker 30min tick → `checkSessionHealth()` (Side B) → if false → `createIntervention()` (Side A)
 - Worker daily tick → `runScrape()` (Side B) → `storeJobsFromScrape()` (Side A) → Telegram send per new job
-- Telegram reply → `/api/telegram/webhook` → match to pending job → create/update application row
+- Telegram callback query (Yes/No button tap) → `/api/telegram/webhook` → match to pending job → create/update application row (QUEUED/REJECTED)
 - Worker apply loop → `claimNextJob()` → `runApplyToJob()` (Side B) → `createIntervention()` as needed → `markJobStatus()` on completion
 - Monitoring UI → Supabase Realtime subscription on interventions + applications → live updates
 

@@ -16,7 +16,13 @@
 - None
 
 ## Last Commit Summary
-- Phase V1-A6: local Node.js worker loop orchestration (`worker/index.js`, `worker/mutex.js`, `worker/sideB.js`, `worker/healthLoop.js`, `worker/scrapeLoop.js`, `worker/applyLoop.js`), short test interval checkpoint verification harness (`worker/test-a6-harness.js`), npm `worker` & `test:worker` scripts, and added AGENTS.md rule against committing GitHub CI/CD workflows.
+- Implemented and hardened Telegram inline Yes/No job confirmation flow:
+  - Added `buildJobConfirmationKeyboard` and inline buttons to `sendJobConfirmation` (`lib/telegram/jobConfirmation.js`).
+  - Added `onTelegramCallbackQuery`, `answerTelegramCallbackQuery`, and `editTelegramMessageReplyMarkup` in `api/telegram/webhook.js` with authoritative `profile_id` resolution from job lookup.
+  - Added structured step-by-step console and file logging (`logs/webhook.log`) across webhook entry, callback ingestion, atomic RPC `resolve_job_confirmation`, and application row verification.
+  - Added live interactive test script `test-telegram-buttons.js` with clean-slate wiping, explicit `(profile_id, job_id)` polling, and 2s initial delay.
+  - Added Telegram webhook registration inspector `test-check-webhook.js` (`npm run check-webhook`).
+  - Updated documentation in `ProjectDocs/03-workflow.md` and verified all 14 test suites in `test-a4-harness.js`.
 
 ## Next Action
-- Phase V1-INT / Side B merge readiness review or next scheduled phase.
+- Deploy webhook changes to Vercel and verify live button taps in Telegram / next planned phase.
