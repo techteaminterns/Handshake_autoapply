@@ -14,6 +14,7 @@
 import { getProfile, checkAndIncrementActionCount, storeJobsFromScrape } from './sideA.js';
 import { runScrape } from './sideB.js';
 import { advanceConfirmationQueue } from '../lib/telegram/jobConfirmation.js';
+import { advanceWhatsAppConfirmationQueue } from '../lib/whatsapp/jobConfirmation.js';
 
 /**
  * Executes a single job scrape tick.
@@ -69,6 +70,14 @@ export async function runScrapeTick(ctx) {
       console.log(`[scrapeLoop] Telegram confirmation queue advanced: ${confirmResult.status}`);
     } catch (teleErr) {
       console.error('[scrapeLoop] Error advancing Telegram confirmation queue:', teleErr.message || teleErr);
+    }
+
+    // 5. Advance WhatsApp confirmation queue
+    try {
+      const waConfirmResult = await advanceWhatsAppConfirmationQueue(ctx.profileId);
+      console.log(`[scrapeLoop] WhatsApp confirmation queue advanced: ${waConfirmResult.status}`);
+    } catch (waErr) {
+      console.error('[scrapeLoop] Error advancing WhatsApp confirmation queue:', waErr.message || waErr);
     }
 
     return { ok: true, newCount };
