@@ -105,10 +105,98 @@ export async function discoverApplicationForm(page, originalUrl) {
     }
   }
 
-  // Strategy 4: Workday — often requires login, handled separately
+  // Strategy 4: Workday — JD page to Apply / Login / Form
   if (currentUrl.includes('workday') || currentUrl.includes('myworkday')) {
-    console.log('📋 Workday detected — checking for login requirement...');
-    return page.url(); // workday.mjs handles login flow
+    console.log('📋 Workday detected — navigating to application form...');
+
+    // Accept cookie notice if present
+    try {
+      const cookieBtn = await page.$('button[data-automation-id="legalNoticeAcceptButton"], button:has-text("Accept Cookies"), button:has-text("Accept all"), button:has-text("Accept")');
+      if (cookieBtn && await cookieBtn.isVisible().catch(() => false)) {
+        console.log('   Dismissing cookie banner...');
+        await cookieBtn.click().catch(() => {});
+        await page.waitForTimeout(500);
+      }
+    } catch {}
+
+    // Check if already on form or sign-in
+    const isAlreadyOnForm = await page.$('input[data-automation-id="email"], input[data-automation-id="userName"], input[data-automation-id="legalNameSection_firstName"], input[name*="legalName"], input[id*="legalName"]');
+    if (isAlreadyOnForm || currentUrl.includes('/apply/')) {
+      console.log('   Already on Workday form / sign-in page.');
+      return page.url();
+    }
+
+    // Target initial Apply button
+    const workdayApplySelectors = [
+      'a[data-automation-id="adventureButton"]',
+      'a[data-automation-id="applyButton"]',
+      'button[data-automation-id="applyButton"]',
+      '[data-automation-id="jobPostingApplyButton"]',
+      'a[data-automation-id*="apply" i]',
+      'button[data-automation-id*="apply" i]',
+      'a[data-uxi-element-id*="apply"]',
+      'button[data-uxi-element-id*="apply"]',
+      'a:has-text("Apply for this job")',
+      'button:has-text("Apply for this job")',
+      'a:has-text("Apply Now")',
+      'button:has-text("Apply Now")',
+      'a:has-text("Apply")',
+      'button:has-text("Apply")',
+    ];
+
+    let applyBtn = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      for (const sel of workdayApplySelectors) {
+        try {
+          const btn = await page.$(sel);
+          if (btn && await btn.isVisible().catch(() => false)) {
+            applyBtn = btn;
+            break;
+          }
+        } catch {}
+      }
+      if (applyBtn) break;
+      await page.waitForTimeout(1500);
+    }
+
+    if (applyBtn) {
+      const text = (await applyBtn.textContent().catch(() => '')).trim();
+      console.log(`   Found initial Workday Apply button: "${text || 'Apply'}" — clicking...`);
+      await applyBtn.click({ force: true }).catch(() => applyBtn.evaluate(el => el.click()));
+      await page.waitForTimeout(2000);
+
+      // Check for popup choices ("Apply Manually", "Autofill with Resume")
+      const manualApplySelectors = [
+        'a[data-automation-id="applyManually"]',
+        'button[data-automation-id="applyManually"]',
+        'a:has-text("Apply Manually")',
+        'button:has-text("Apply Manually")',
+        'a[href*="applyManually"]',
+        'a[data-automation-id="autofillWithResume"]',
+        'button[data-automation-id="autofillWithResume"]',
+        'a:has-text("Autofill with Resume")',
+      ];
+
+      for (const sel of manualApplySelectors) {
+        try {
+          const opt = await page.$(sel);
+          if (opt && await opt.isVisible().catch(() => false)) {
+            const optText = (await opt.textContent().catch(() => '')).trim();
+            console.log(`   Selecting Workday apply option: "${optText}"...`);
+            await opt.click({ force: true }).catch(() => opt.evaluate(el => el.click()));
+            await page.waitForTimeout(2000);
+            break;
+          }
+        } catch {}
+      }
+
+      try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch {}
+      try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
+      await page.waitForTimeout(2500);
+      return page.url();
+    }
+
+    return page.url();
   }
 
   // Strategy 5: Gem — direct application pages

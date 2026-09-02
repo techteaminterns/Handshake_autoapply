@@ -41,6 +41,8 @@ const positionalArgs = [];
 for (let i = 0; i < rawArgs.length; i++) {
   if (rawArgs[i] === '--otp-email' && rawArgs[i + 1]) otpEmail = rawArgs[++i];
   else if (rawArgs[i] === '--otp-password' && rawArgs[i + 1]) otpPassword = rawArgs[++i];
+  else if (rawArgs[i] === '--workday-email' && rawArgs[i + 1]) workdayEmail = rawArgs[++i];
+  else if (rawArgs[i] === '--workday-password' && rawArgs[i + 1]) workdayPassword = rawArgs[++i];
   else positionalArgs.push(rawArgs[i]);
 }
 
@@ -185,7 +187,7 @@ async function cmdScan(url) {
     console.log('Usage: node cli.mjs scan <url>');
     process.exit(1);
   }
-  await scanForm(url);
+  await scanForm(url, { workdayEmail, workdayPassword, otpEmail, otpPassword });
 }
 
 // ─── FILL ───────────────────────────────────────────────────────────────────
@@ -205,7 +207,7 @@ async function cmdFill(url, planPath) {
     // Auto-generate plan
     console.log('📋 Auto-generating fill plan from profile...');
     const profile = await loadProfile();
-    const scan = await scanForm(url);
+    const scan = await scanForm(url, { workdayEmail, workdayPassword, otpEmail, otpPassword });
     const resumePath = await pickResume('', resolve(process.cwd(), 'config', 'resumes.yml')).catch(() => null);
     plan = await generatePlan(scan, profile, { resumePath, url });
 
@@ -249,7 +251,7 @@ async function cmdApply(url) {
 
   // Step 1: Scan
   console.log('\n── Step 1: Scan form ──');
-  const scan = await scanForm(url);
+  const scan = await scanForm(url, { workdayEmail, workdayPassword, otpEmail, otpPassword });
 
   // Step 2: Load profile & pick resume
   console.log('\n── Step 2: Load profile & pick resume ──');
@@ -601,8 +603,10 @@ Usage:
   node cli.mjs status                      Show stats & learnings
 
 Options:
-  --otp-email <gmail>       Gmail for OTP (or set EMAIL in .env)
-  --otp-password <app-pw>   Gmail App Password (or set APP_PASSWORD in .env)
+  --otp-email <gmail>           Gmail for OTP (or set EMAIL in .env)
+  --otp-password <app-pw>       Gmail App Password (or set APP_PASSWORD in .env)
+  --workday-email <email>       Workday account email (or set WORKDAY_EMAIL in .env)
+  --workday-password <password> Workday account password (or set WORKDAY_PASSWORD in .env)
 
 Supported ATS: Greenhouse, Ashby, Lever, Workday, Gem, iCIMS, SmartRecruiters, generic
 

@@ -9,7 +9,8 @@
 import { chromium } from 'playwright';
 import { writeFile, mkdir } from 'fs/promises';
 import { resolve } from 'path';
-import { discoverApplicationForm } from './discovery.mjs';
+import { discoverApplicationForm, detectATS } from './discovery.mjs';
+import { isWorkdayLogin, handleWorkday } from './workday.mjs';
 
 // ─── Submit button patterns ────────────────────────────────────────────────
 const SUBMIT_PATTERNS = [
@@ -45,7 +46,7 @@ export function slugify(url) {
 }
 
 // ─── Scan a form ────────────────────────────────────────────────────────────
-export async function scanForm(url, { formsDir, browser: existingBrowser } = {}) {
+export async function scanForm(url, { formsDir, browser: existingBrowser, workdayEmail, workdayPassword, otpEmail, otpPassword } = {}) {
   console.log(`🔍 Scanning: ${url}`);
   const outDir = formsDir || resolve(process.cwd(), 'forms');
   await mkdir(outDir, { recursive: true });
@@ -64,9 +65,29 @@ export async function scanForm(url, { formsDir, browser: existingBrowser } = {})
     try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch { /* partial load OK */ }
     await page.waitForTimeout(2000);
 
+    const ats = detectATS(url);
     let formUrl = url;
     const foundForm = await discoverApplicationForm(page, url);
     if (foundForm) formUrl = foundForm;
+
+    if (ats === 'workday') {
+      const isLogin = await isWorkdayLogin(page);
+      if (isLogin) {
+        console.log('   Authenticating on Workday before scanning form fields...');
+        await handleWorkday(page, {
+          email: workdayEmail || otpEmail,
+          password: workdayPassword,
+          otpEmail,
+          otpPassword,
+        });
+      }
+
+      try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
+      await page.waitForTimeout(3000);
+      try {
+        await page.waitForSelector('input:not([type="hidden"]), select, textarea, [data-automation-id*="form"], [data-automation-id*="page"], [data-automation-id*="Section"]', { timeout: 10000 });
+      } catch {}
+    }
 
     const pageTitle = await page.title();
 
@@ -98,6 +119,19 @@ export async function scanForm(url, { formsDir, browser: existingBrowser } = {})
           const textNode = Array.from(parent.childNodes).find(n => n.nodeType === 3 && n.textContent.trim());
           if (textNode) return textNode.textContent.trim();
         }
+
+        const autoId = el.getAttribute('data-automation-id') || '';
+        const idOrName = el.id || el.name || autoId;
+        if (idOrName) {
+          const clean = idOrName
+            .replace(/^(name--|address--|phoneNumber--)/, '')
+            .replace(/--/g, ' ')
+            .replace(/([A-Z])/g, ' $1')
+            .replace(/_/g, ' ')
+            .trim();
+          if (clean) return clean.charAt(0).toUpperCase() + clean.slice(1);
+        }
+
         return el.name || el.id || '';
       }
 
@@ -107,6 +141,7 @@ export async function scanForm(url, { formsDir, browser: existingBrowser } = {})
       }
 
       document.querySelectorAll('input, textarea, select').forEach(el => {
+        if (el.getAttribute('data-automation-id') === 'beecatcher' || el.name === 'website') return;
         const type = el.type || el.tagName.toLowerCase();
         if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) return;
 

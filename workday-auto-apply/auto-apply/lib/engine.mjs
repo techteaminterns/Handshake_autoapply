@@ -25,6 +25,13 @@ async function clickSubmitButton(page) {
   const submitSelectors = [
     'button:has-text("Submit application")',
     'button:has-text("Submit Application")',
+    'button:has-text("Review and Submit")',
+    'button:has-text("Review & Submit")',
+    'button:has-text("Save and Continue")',
+    'button:has-text("Save & Continue")',
+    'button[data-automation-id="bottom-navigation-next-button"]',
+    'button[data-automation-id="page-footer-next-button"]',
+    'button[data-automation-id="submit-button"]',
     'input[type="submit"]',
     'button[type="submit"]',
     'button:has-text("Submit")',
@@ -42,7 +49,7 @@ async function clickSubmitButton(page) {
         if (!visible) continue;
         const text = await btn.textContent().catch(() => '');
         console.log(`  🚀 Clicking Submit: "${text.trim()}"...`);
-        await btn.click();
+        await btn.click({ force: true }).catch(() => btn.evaluate(el => el.click()));
         await page.waitForTimeout(3000);
         return true;
       }
@@ -203,10 +210,14 @@ export async function fillForm(url, plan, { otpEmail, otpPassword, workdayEmail,
       if (!wdOk) {
         console.log('  ⚠️  Workday login failed — attempting to fill anyway...');
       }
-      await page.waitForTimeout(2000);
+      try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
+      await page.waitForTimeout(3000);
+      try {
+        await page.waitForSelector('input:not([type="hidden"]), select, textarea, [data-automation-id*="form"], [data-automation-id*="page"], [data-automation-id*="Section"]', { timeout: 10000 });
+      } catch {}
+    } else {
+      await discoverApplicationForm(page, url);
     }
-
-    await discoverApplicationForm(page, url);
 
     const fills = plan.fills || plan.fields || [];
     let filled = 0, skipped = 0, errors = 0;
