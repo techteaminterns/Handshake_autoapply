@@ -8,6 +8,8 @@ import MonitoringScreen from './screens/MonitoringScreen.js';
 
 import type { Session } from '@supabase/supabase-js';
 
+const isProfileComplete = (p: any) => Boolean(p && p.first_name && p.student_email);
+
 export default function App() {
     const [session, setSession] = useState<Session | null>(null);
     const [profile, setProfile] = useState<any>(null);
@@ -24,19 +26,30 @@ export default function App() {
 
         const fetchProfile = async (userId: string) => {
             try {
-                const { data: profileData } = await supabase
+                console.log('[App] fetchProfile starting for userId:', userId);
+                const { data: profileData, error: profileErr } = await supabase
                     .from('profiles')
                     .select('*')
                     .eq('id', userId)
                     .maybeSingle();
+
+                if (profileErr) {
+                    console.warn('[App] profile fetch error:', profileErr);
+                }
+
                 if (isMounted) {
-                    setProfile(profileData ?? null);
-                    if (!profileData) {
+                    if (profileData && isProfileComplete(profileData)) {
+                        console.log('[App] completed profile found in DB for userId:', userId, 'profileId:', profileData.id, '-> setting viewMode to monitoring');
+                        setProfile(profileData);
+                        setViewMode('monitoring');
+                    } else {
+                        console.log('[App] no completed profile found in DB for userId:', userId, '-> setting viewMode to onboarding');
+                        setProfile(profileData || null);
                         setViewMode('onboarding');
                     }
                 }
             } catch (err) {
-                console.warn('[App] profile fetch error:', err);
+                console.warn('[App] profile fetch exception:', err);
             }
         };
 
@@ -58,7 +71,8 @@ export default function App() {
 
         initAuth();
 
-        const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+        const { data: authListener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+            console.log('[App] onAuthStateChange event:', event, 'userId:', newSession?.user?.id);
             if (!isMounted) return;
             setSession(newSession ?? null);
             if (newSession?.user?.id) {
@@ -97,8 +111,8 @@ export default function App() {
         );
     }
 
-    const isMonitoring = Boolean(profile && viewMode === 'monitoring');
-    console.log(`[App.tsx:104] Authenticated view decision: hasSession=${!!session}, profileId=${profile?.id ?? 'none'}, viewMode=${viewMode} -> rendering ${isMonitoring ? 'MonitoringScreen' : 'OnboardingScreen'}`);
+    const isMonitoring = Boolean(profile && isProfileComplete(profile) && viewMode === 'monitoring');
+    console.log(`[App] Authenticated view decision: hasSession=${!!session}, profileId=${profile?.id ?? 'none'}, isComplete=${isProfileComplete(profile)}, viewMode=${viewMode} -> rendering ${isMonitoring ? 'MonitoringScreen' : 'OnboardingScreen'}`);
 
     return (
         <View style={styles.container}>
@@ -111,7 +125,7 @@ export default function App() {
                         accessToken={session.access_token}
                         profile={profile}
                         onEditProfile={() => {
-                            console.log('[App.tsx] Edit profile clicked -> switching viewMode to onboarding');
+                            console.log('[App] Edit profile clicked -> switching viewMode to onboarding');
                             setViewMode('onboarding');
                         }}
                         onSignOut={handleSignOut}
@@ -123,7 +137,7 @@ export default function App() {
                         accessToken={session.access_token}
                         existingProfile={profile}
                         onProfileSaved={(saved: any) => {
-                            console.log('[App.tsx:120] onProfileSaved received profile:', saved?.id, 'switching viewMode to monitoring');
+                            console.log('[App] onProfileSaved received profile:', saved?.id || 'saved', '-> auto-navigating to MonitoringScreen');
                             setProfile(saved);
                             setViewMode('monitoring');
                         }}

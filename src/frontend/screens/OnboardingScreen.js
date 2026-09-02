@@ -206,6 +206,8 @@ export async function clearDraftFromStorage(uid) {
   }
 }
 
+export const isProfileComplete = (p) => Boolean(p && p.first_name && p.student_email);
+
 export default function OnboardingScreen({ userId, accessToken, existingProfile, onProfileSaved, onSignOut }) {
   const [draft,            setDraft]           = useState(() => profileToDraft(existingProfile));
   const [isDraftRestored,  setIsDraftRestored] = useState(false);
@@ -218,29 +220,34 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
   const [waModalOpen,      setWaModalOpen]     = useState(false);
   const [waLoading,        setWaLoading]       = useState(false);
   const [gmailState,       setGmailState]      = useState('disconnected');
-  const [mode,             setMode]            = useState(existingProfile ? 'submitted' : 'editing');
+  const [mode,             setMode]            = useState(() => (isProfileComplete(existingProfile) ? 'submitted' : 'editing'));
   const [resumeBusy,       setResumeBusy]      = useState(false);
   const [parseNotice,      setParseNotice]     = useState(null);
 
-  // Restore saved draft on mount if in editing mode and no existing backend profile
+  // Restore saved draft on mount if in editing mode
   useEffect(() => {
     let isMounted = true;
     async function checkSavedDraft() {
-      if (existingProfile) {
-        if (isMounted) setIsDraftRestored(true);
-        return;
-      }
       try {
+        console.log('[OnboardingScreen] Checking saved draft in AsyncStorage for userId:', userId);
         const saved = await loadDraftFromStorage(userId);
-        if (saved && isMounted && mode === 'editing') {
+        if (saved && isMounted) {
+          console.log('[OnboardingScreen] Successfully restored draft from AsyncStorage for userId:', userId);
           setDraft(prev => ({
             ...EMPTY_DRAFT,
+            ...(existingProfile ? profileToDraft(existingProfile) : {}),
             ...prev,
             ...saved,
           }));
+          if (Object.keys(saved).some(k => saved[k] && (!Array.isArray(saved[k]) || saved[k].length > 0))) {
+            setMode('editing');
+          }
+        } else if (existingProfile && isMounted) {
+          console.log('[OnboardingScreen] No storage draft found, initializing from existingProfile');
+          setDraft(profileToDraft(existingProfile));
         }
       } catch (err) {
-        console.warn('[Onboarding] Error checking saved draft:', err);
+        console.warn('[OnboardingScreen] Error checking saved draft:', err);
       } finally {
         if (isMounted) {
           setIsDraftRestored(true);
@@ -249,15 +256,15 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     }
     checkSavedDraft();
     return () => { isMounted = false; };
-  }, [userId, existingProfile, mode]);
+  }, [userId, existingProfile]);
 
   // Keep saved draft in sync with state changes during editing AFTER draft has been restored
   useEffect(() => {
-    if (!isDraftRestored) return;
-    if (mode === 'editing' && !existingProfile && userId) {
+    if (!isDraftRestored || !userId) return;
+    if (mode === 'editing') {
       saveDraftToStorage(userId, draft);
     }
-  }, [draft, mode, userId, existingProfile, isDraftRestored]);
+  }, [draft, mode, userId, isDraftRestored]);
 
   const handleCreateNewProfile = async () => {
     try {
@@ -357,16 +364,6 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
     }
   }, [existingProfile?.whatsapp_phone]);
 
-  // Sync mode when App.tsx delivers the profile after the initial render.
-  // Without this, a user who has already submitted stays in 'editing' until
-  // they manually interact, which could trigger a spurious API call.
-  useEffect(() => {
-    if (existingProfile && mode === 'editing') {
-      setMode('submitted');
-      setDraft(profileToDraft(existingProfile));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingProfile]);
 
   // Realtime subscription + polling for telegram_chat_id
   useEffect(() => {
@@ -812,9 +809,21 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
           <TouchableOpacity style={[s.btn, s.editBtn, s.flexBtn]} onPress={() => setMode('editing')}>
             <Text style={s.btnTxt}>Edit Profile</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[s.btn, s.createBtn, s.flexBtn]} onPress={handleCreateNewProfile}>
-            <Text style={s.btnTxt}>Create New Profile</Text>
-          </TouchableOpacity>
+          {onProfileSaved && (existingProfile || draft.first_name) ? (
+            <TouchableOpacity
+              style={[s.btn, s.createBtn, s.flexBtn]}
+              onPress={() => {
+                console.log('[OnboardingScreen] Navigating to Monitoring Dashboard');
+                onProfileSaved(existingProfile || { ...draft, id: userId });
+              }}
+            >
+              <Text style={s.btnTxt}>Dashboard →</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={[s.btn, s.createBtn, s.flexBtn]} onPress={handleCreateNewProfile}>
+              <Text style={s.btnTxt}>Create New Profile</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* WhatsApp QR Modal */}
@@ -1021,7 +1030,17 @@ export default function OnboardingScreen({ userId, accessToken, existingProfile,
       </TouchableOpacity>
       {existingProfile && (
         <TouchableOpacity style={s.cancelBtn}
-          onPress={() => { setDraft(profileToDraft(existingProfile)); setMode('submitted'); setErrors({}); setSubmitError(null); }}
+          onPress={() => {
+            console.log('[OnboardingScreen] Cancel clicked -> returning to MonitoringScreen');
+            setErrors({});
+            setSubmitError(null);
+            if (onProfileSaved && existingProfile) {
+              onProfileSaved(existingProfile);
+            } else {
+              setDraft(profileToDraft(existingProfile));
+              setMode('submitted');
+            }
+          }}
         >
           <Text style={s.cancelTxt}>Cancel</Text>
         </TouchableOpacity>

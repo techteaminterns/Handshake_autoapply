@@ -18,10 +18,10 @@
 - None
 
 ## Last Commit Summary
-- Enhanced [src/frontend/screens/OnboardingScreen.js](file:///C:/Users/yaswa/OneClickHandshake/src/frontend/screens/OnboardingScreen.js):
-  - Added "Link WhatsApp" button, connection status indicators, and QR Code scan modal with live WebSocket and Realtime/polling listener fallback.
-  - Connected PDF resume extraction to auto-populate onboarding fields on PDF upload with a confirmation banner.
-  - Added read-only recap reflection for linked WhatsApp phone number.
+- Enhanced [src/frontend/App.tsx](file:///C:/Users/yaswa/OneClickHandshake/src/frontend/App.tsx) and [src/frontend/screens/OnboardingScreen.js](file:///C:/Users/yaswa/OneClickHandshake/src/frontend/screens/OnboardingScreen.js):
+  - Added profile completeness validation (`isProfileComplete`) to accurately route users to MonitoringScreen vs OnboardingScreen.
+  - Enhanced draft restoration logic from storage and existing profile syncing.
+  - Added direct Dashboard navigation button and polished Cancel action to return to monitoring view when profile already exists.
 
 ## Next Action
 - Ready for Side B Playwright bot integration pass (Phase V1-INT) or live student credential execution.

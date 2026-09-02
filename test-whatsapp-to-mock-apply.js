@@ -340,6 +340,7 @@ async function main() {
   console.log('--------------------------------------------------');
 
   if (!simulateYes) {
+    console.log('Sending to:', targetPhone);
     const sendResult = await sendWhatsAppJobConfirmation(profileId, seededJob, {
       supabase,
       phone: targetPhone,
