@@ -24,40 +24,41 @@ node_modules/
 .expo/
 **/.expo/
 .metro-cache/
-src/frontend/dist-web/
+**/dist-web/
+dist-web/
 
 # Supabase CLI cache (linked project metadata — never commit)
 supabase/.temp/
+**/supabase/.temp/
 
 # Local purge artifacts (never commit)
 .git-filter-repo-replacements.txt
 .pre-purge-wip.patch
 
 # Bot runtime artifacts (may contain PII)
-bot/bot-state.json
-bot/captured_details.csv
-bot/data/profile.csv
-bot/.env
-bot/debug-onboarding.png
-bot/test-resume.pdf
+**/bot-state.json
+**/captured_details.csv
+**/data/profile.csv
+**/debug-onboarding.png
+**/test-resume.pdf
 signup.png
+**/signup.png
 
 # WhatsApp Baileys session storage (never commit private keys)
 sessions/
-sessions/**
+**/sessions/
+**/sessions/**
 
 # Local scratch scripts
 test-tele.js
+**/test-tele.js
 
 # GitHub Actions workflows (kept local for now)
 .github/
-
-# Expo logs / local env
-src/frontend/.expo/
-src/frontend/.env
-src/frontend/.env.*
+**/.github/
 
 # OS & Logs
 .DS_Store
 Thumbs.db
 *.log
+**/*.log

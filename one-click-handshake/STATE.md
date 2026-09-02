@@ -18,11 +18,11 @@
 - None
 
 ## Last Commit Summary
-- Enhanced [src/frontend/App.tsx](file:///C:/Users/yaswa/OneClickHandshake/src/frontend/App.tsx) and [src/frontend/screens/OnboardingScreen.js](file:///C:/Users/yaswa/OneClickHandshake/src/frontend/screens/OnboardingScreen.js):
-  - Added profile completeness validation (`isProfileComplete`) to accurately route users to MonitoringScreen vs OnboardingScreen.
-  - Enhanced draft restoration logic from storage and existing profile syncing.
-  - Added direct Dashboard navigation button and polished Cancel action to return to monitoring view when profile already exists.
+- Reorganized repo structure:
+  - Moved all OneClickHandshake project files into [one-click-handshake/](file:///C:/Users/yaswa\OneClickHandshake/one-click-handshake) using `git mv` to preserve full history.
+  - Added empty [workday-auto-apply/](file:///C:/Users/yaswa/OneClickHandshake/workday-auto-apply) folder with `.gitkeep`.
+  - Configured root [package.json](file:///C:/Users/yaswa/OneClickHandshake/package.json) workspaces and updated script paths for root and subproject command execution.
 
 ## Next Action
-- Ready for Side B Playwright bot integration pass (Phase V1-INT) or live student credential execution.
+- Ready for Workday Auto Apply project scaffold or Side B Playwright integration testing.
 
