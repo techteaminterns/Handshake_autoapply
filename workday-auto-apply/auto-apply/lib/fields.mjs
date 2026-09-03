@@ -21,15 +21,30 @@ export function fuzzyScore(needle, haystack) {
 // ─── Universal element finder ───────────────────────────────────────────────
 // Tries multiple strategies to locate a form field. No hardcoded portal logic.
 export async function findField(page, entry) {
-  const { selector, id, name, label } = entry;
+  const { selector, id, name, label, automationId } = entry;
   const strategies = [
     // 1. Direct selector from scan
     async () => selector ? await page.$(selector) : null,
-    // 2. By ID
-    async () => id ? await page.$(`#${CSS.escape(id)}`) : null,
-    // 3. By name
+    // 2. By data-automation-id (Workday standard)
+    async () => {
+      const autoId = automationId || entry['data-automation-id'];
+      if (autoId) return await page.$(`[data-automation-id="${autoId}"]`);
+      return null;
+    },
+    // 3. By ID (with attribute selector and escaped ID)
+    async () => {
+      if (!id) return null;
+      try {
+        const byAttr = await page.$(`[id="${id}"]`);
+        if (byAttr) return byAttr;
+        return await page.$(`#${CSS.escape(id)}`);
+      } catch {
+        return null;
+      }
+    },
+    // 4. By name
     async () => name ? await page.$(`[name="${name}"]`) : null,
-    // 4. Playwright's getByLabel (the most robust for accessible forms)
+    // 5. Playwright's getByLabel (the most robust for accessible forms)
     async () => {
       if (!label) return null;
       const cleanLabel = label.replace(/\*+/g, '').trim();
@@ -40,7 +55,7 @@ export async function findField(page, entry) {
       } catch { /* label not found */ }
       return null;
     },
-    // 5. Find input near label text (for custom layouts)
+    // 6. Find input near label text (for custom layouts)
     async () => {
       if (!label) return null;
       const cleanLabel = label.replace(/\*+/g, '').trim();
@@ -52,6 +67,10 @@ export async function findField(page, entry) {
         `label:has-text("${cleanLabel}") ~ div input`,
         `label:has-text("${cleanLabel}") + textarea`,
         `label:has-text("${cleanLabel}") + select`,
+        `label:has-text("${cleanLabel}") ~ select`,
+        `label:has-text("${cleanLabel}") ~ div select`,
+        `div:has-text("${cleanLabel}") + input`,
+        `div:has-text("${cleanLabel}") + div input`,
       ]) {
         try {
           const el = await page.$(combo);
@@ -74,13 +93,18 @@ export async function findField(page, entry) {
 // ─── Option selectors for dropdown scanning ─────────────────────────────────
 const OPTION_SELECTORS = [
   '.select__option',                      // React Select (Greenhouse)
-  '[role="option"]',                       // ARIA standard (Lever, Ashby)
+  '[role="option"]',                       // ARIA standard (Lever, Ashby, Workday)
   '.select2-results__option',              // Select2 (legacy ATS)
   '[class*="menu"] [class*="option"]',     // CSS module pattern
   '[class*="listbox"] [class*="option"]',  // ARIA listbox pattern
   'li[class*="option"]',                   // Lever, BambooHR
   '.dropdown-item',                        // Bootstrap-based ATS
   'div[data-value]',                       // Workday custom selects
+  'div[data-automation-id="select-widget"]', // Workday select widget
+  '[data-automation-id="promptOption"]',   // Workday prompt option
+  '[data-automation-id="menuItem"]',       // Workday menu item
+  'li[data-automation-id*="option"]',      // Workday list option
+  'div[data-automation-id*="dropdown"]',   // Workday dropdown
   '.css-option, .css-1n7v3ny-option',      // Emotion/styled-components
   'ul.dropdown-content li',                // Materialize-based
   '[class*="MenuItem"]',                   // MUI Select
@@ -102,20 +126,36 @@ export async function handleDropdown(page, element, value, label) {
     }
   }
 
-  // Strategy 2: Type-to-filter + click (best for React Select / searchable dropdowns)
+  // Strategy 2: Type value + press Enter (best for Workday searchable selects, "How Did You Hear", React Select)
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await element.scrollIntoViewIfNeeded();
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(300);
-      await element.click();
-      await page.waitForTimeout(300);
-      await element.fill('');
       await page.waitForTimeout(200);
+      await element.click();
+      await page.waitForTimeout(200);
+      await element.fill('');
+      await page.waitForTimeout(100);
 
-      await element.type(value.substring(0, 15), { delay: 80 });
-      await page.waitForTimeout(800 * attempt);
+      // Type value -> waitForTimeout(500) -> press('Enter') -> waitForLoadState
+      await element.type(value, { delay: 50 });
+      await page.waitForTimeout(500);
+      await page.keyboard.press('Enter');
+      try { await page.waitForLoadState('networkidle', { timeout: 3000 }); } catch {}
+      await page.waitForTimeout(500);
 
+      const verified = await verifyDropdownFilled(page, element, value);
+      if (verified) {
+        return { success: true, method: 'type-enter', attempt };
+      }
+
+      // Check if input value itself matched
+      const currentVal = await element.inputValue().catch(() => '');
+      if (currentVal && fuzzyScore(value, currentVal) >= 0.3) {
+        return { success: true, method: 'type-enter-val', attempt };
+      }
+
+      // If Enter alone did not confirm, fall back to matching popup option and clicking
       let bestMatch = null;
       let bestScore = 0;
 
@@ -141,18 +181,13 @@ export async function handleDropdown(page, element, value, label) {
 
       if (bestMatch && bestScore >= 0.3) {
         await bestMatch.click();
-        await page.waitForTimeout(600);
+        await page.waitForTimeout(500);
+        try { await page.waitForLoadState('networkidle', { timeout: 3000 }); } catch {}
 
-        const verified = await verifyDropdownFilled(page, element, value);
-        if (verified) {
-          return { success: true, method: 'type-filter', score: bestScore, attempt };
+        const optVerified = await verifyDropdownFilled(page, element, value);
+        if (optVerified) {
+          return { success: true, method: 'type-filter-click', score: bestScore, attempt };
         }
-        if (attempt < 3) {
-          console.log(`    ↻ Clicked but value didn't stick, retry ${attempt}/3 for "${label || 'unknown'}"...`);
-          continue;
-        }
-      } else if (attempt < 3) {
-        console.log(`    ↻ No matching option, retry ${attempt}/3 for "${label || 'unknown'}"...`);
       }
     } catch (err) {
       if (attempt < 3) {

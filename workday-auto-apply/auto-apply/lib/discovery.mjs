@@ -19,7 +19,7 @@ export function detectATS(url) {
 
 // ─── Portal-aware form discovery ────────────────────────────────────────────
 // Each ATS has different patterns for getting from JD page to form.
-export async function discoverApplicationForm(page, originalUrl) {
+export async function discoverApplicationForm(page, originalUrl, { mode = 'signin' } = {}) {
   const currentUrl = page.url();
 
   // Strategy 1: Greenhouse — check for #app anchor or embedded form
@@ -119,14 +119,21 @@ export async function discoverApplicationForm(page, originalUrl) {
       }
     } catch {}
 
-    // Check if already on form or sign-in
-    const isAlreadyOnForm = await page.$('input[data-automation-id="email"], input[data-automation-id="userName"], input[data-automation-id="legalNameSection_firstName"], input[name*="legalName"], input[id*="legalName"]');
-    if (isAlreadyOnForm || currentUrl.includes('/apply/')) {
-      console.log('   Already on Workday form / sign-in page.');
+    // 1. Check if already on wizard form (Step 1..5)
+    const isAlreadyOnWizard = await page.$([
+      'button:has-text("Save and Continue")',
+      'button:has-text("Save & Continue")',
+      'button[data-automation-id="bottom-navigation-next-button"]',
+      'input[data-automation-id="legalNameSection_firstName"]',
+      '[data-automation-id*="wizardStep"]',
+    ].join(', ')).catch(() => null);
+
+    if (isAlreadyOnWizard && await isAlreadyOnWizard.isVisible().catch(() => false)) {
+      console.log('   Already on Workday application wizard.');
       return page.url();
     }
 
-    // Target initial Apply button
+    // 2. Target initial Apply button on JD page
     const workdayApplySelectors = [
       'a[data-automation-id="adventureButton"]',
       'a[data-automation-id="applyButton"]',
@@ -156,7 +163,7 @@ export async function discoverApplicationForm(page, originalUrl) {
         } catch {}
       }
       if (applyBtn) break;
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1000);
     }
 
     if (applyBtn) {
@@ -190,9 +197,76 @@ export async function discoverApplicationForm(page, originalUrl) {
         } catch {}
       }
 
+      // 3. Detect Create Account / Sign In gateway page and switch accordingly
+      console.log(`   Handling Workday gateway page (mode: "${mode}")...`);
+      await page.waitForTimeout(1500);
+
+      if (mode === 'signin') {
+        const signInSelectors = [
+          'a[data-automation-id="signInLink"]',
+          'button[data-automation-id="signInLink"]',
+          'a:has-text("Sign In")',
+          'button:has-text("Sign In")',
+          '[data-automation-id="signInTab"]',
+        ];
+
+        for (const sel of signInSelectors) {
+          try {
+            const btn = await page.$(sel);
+            if (btn && await btn.isVisible().catch(() => false)) {
+              const autoId = await btn.getAttribute('data-automation-id').catch(() => '');
+              const type = await btn.getAttribute('type').catch(() => '');
+              if (autoId !== 'signInSubmitButton' && type !== 'submit') {
+                console.log('   Clicking "Sign In" link on gateway page...');
+                await btn.click({ force: true }).catch(() => btn.evaluate(el => el.click()));
+                await page.waitForTimeout(1500);
+                break;
+              }
+            }
+          } catch {}
+        }
+
+        // Wait for sign-in form to appear (email + password inputs)
+        try {
+          await page.waitForSelector('input[data-automation-id="password"], input[type="password"]', { timeout: 10000 });
+          console.log('   ✅ Sign-in form ready (password input visible).');
+        } catch {
+          console.log('   ⚠️  Waiting for sign-in form inputs...');
+        }
+      } else if (mode === 'signup') {
+        const createAccountSelectors = [
+          'button[data-automation-id="createAccountLink"]',
+          'button:has-text("Create Account")',
+          'a:has-text("Create Account")',
+          '[data-automation-id="createAccountTab"]',
+        ];
+
+        for (const sel of createAccountSelectors) {
+          try {
+            const btn = await page.$(sel);
+            if (btn && await btn.isVisible().catch(() => false)) {
+              const autoId = await btn.getAttribute('data-automation-id').catch(() => '');
+              const type = await btn.getAttribute('type').catch(() => '');
+              if (autoId !== 'createAccountSubmitButton' && type !== 'submit') {
+                console.log('   Clicking "Create Account" button on gateway page...');
+                await btn.click({ force: true }).catch(() => btn.evaluate(el => el.click()));
+                await page.waitForTimeout(1500);
+                break;
+              }
+            }
+          } catch {}
+        }
+
+        // Wait for create account form to appear
+        try {
+          await page.waitForSelector('input[data-automation-id="verifyPassword"], input[data-automation-id="email"]', { timeout: 10000 });
+          console.log('   ✅ Create Account form ready.');
+        } catch {}
+      }
+
       try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch {}
       try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
-      await page.waitForTimeout(2500);
+      await page.waitForTimeout(2000);
       return page.url();
     }
 

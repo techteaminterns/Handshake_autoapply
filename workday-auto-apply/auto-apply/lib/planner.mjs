@@ -12,18 +12,16 @@ import { fuzzyScore } from './fields.mjs';
 
 // ─── Field label → profile key mapping ──────────────────────────────────────
 // Each entry: [regex to match field label, path in profile.yml, optional transform]
-const FIELD_MAP = [
+export const FIELD_MAP = [
   // Personal
-  [/^(legal\s*)?(first|given)\s*name(\s*local)?(\(s\))?$/i, 'personal.first_name'],
-  [/^legalName--firstName|^Given Name/i, 'personal.first_name'],
-  [/^(legal\s*)?(last|family|surname)\s*name(\s*local)?(\(s\))?$/i, 'personal.last_name'],
-  [/^legalName--lastName|^Family Name/i, 'personal.last_name'],
+  [/^(legal\s*)?(first|given)\s*name(\s*local)?(\(s\))?$|^legalName--firstNameLocal$|^legalName--firstName|^Given Name/i, 'personal.first_name'],
+  [/^(legal\s*)?(last|family|surname)\s*name(\s*local)?(\(s\))?$|^legalName--lastNameLocal$|^legalName--lastName|^Family Name/i, 'personal.last_name'],
   [/^(full\s*)?name$/i, 'personal.full_name'],  // resolved as first + last
   [/^email/i, 'personal.email'],
   [/phone\s*device\s*type/i, '_static.Mobile'],
   [/country\s*phone\s*code|^phoneNumber--countryPhoneCode/i, 'personal.country_phone_code'],
-  [/phone\s*number|^phoneNumber--phoneNumber/i, 'personal.phone'],
-  [/^phone/i, 'personal.phone'],
+  [/extension|^phoneNumber--extension$/i, 'personal.phone_extension'],
+  [/^phone\s*number$|^phoneNumber--phoneNumber$|^phone$/i, 'personal.phone'],
   [/linkedin/i, 'personal.linkedin'],
   [/portfolio|website|url|shared\s*url/i, 'personal.linkedin'],
   [/^city$|^address--city/i, 'personal.city'],
@@ -35,28 +33,34 @@ const FIELD_MAP = [
   [/^country$/i, 'personal.country'],
   [/address/i, 'personal.location'],
 
-  // Work auth
+  // Work auth & eligibility
+  [/conflict\s*of\s*interest/i, '_static.No'],
+  [/current\s*contractor/i, '_static.No'],
   [/sponsor|visa/i, 'work_auth.sponsorship_needed'],
   [/authorized.*work|legally.*work|eligible.*work|work.*authorization/i, 'work_auth.authorized_us'],
 
-  // EEO
+  // EEO & Disclosures
   [/gender/i, 'eeo.gender'],
   [/hispanic|latino/i, 'eeo.hispanic_latino'],
   [/race|ethnicity/i, 'eeo.race'],
   [/veteran/i, 'eeo.veteran_status'],
   [/disability/i, 'eeo.disability_status'],
+  [/consent.*terms|terms\s*and\s*conditions|agree.*terms/i, '_static.true'],
 
   // Education
   [/degree/i, 'education.degree'],
   [/major|field\s*of\s*study/i, 'education.major'],
   [/university|school|college|institution/i, 'education.university'],
   [/graduat|year/i, 'education.graduation_year'],
-  [/gpa/i, 'education.gpa'],
+  [/gpa|grade/i, 'education.gpa'],
 
   // Experience
   [/years?\s*(of\s*)?experience/i, 'experience.years'],
-  [/current\s*(company|employer)/i, 'experience.current_company'],
-  [/current\s*(title|role|position)/i, 'experience.current_title'],
+  [/job\s*title/i, 'experience.current_title'],
+  [/current\s*(company|employer)|company/i, 'experience.current_company'],
+  [/current\s*(title|role|position)|title/i, 'experience.current_title'],
+  [/currently\s*work\s*here/i, '_static.true'],
+  [/role\s*description|job\s*description/i, 'experience.description'],
   [/salary|compensation|pay/i, 'experience.salary_expectation'],
   [/notice\s*period|start\s*date|available|earliest/i, 'experience.start_date'],
 
@@ -70,8 +74,13 @@ const FIELD_MAP = [
   // Prior worker / employed before
   [/prior\s*worker|previously\s*worked|former\s*employee|employed.*in\s*the\s*past|self\s*identify.*prior/i, '_static.No'],
 
-  // How did you hear — use "Job Boards" as universal fallback
-  [/how\s*did\s*you\s*hear|referral|source/i, '_static.Job Boards'],
+  // How did you hear — map to personal.source with fallback
+  [/how\s*did\s*you\s*hear|referral|^source(--source)?$|^source$/i, 'personal.source'],
+  [/how\s*did\s*you\s*hear|referral|^source(--source)?$|^source$/i, '_static.LinkedIn'],
+
+  // Consent & Agreement (including Workday dynamic checkboxes like x34r4)
+  [/consent.*terms|terms\s*and\s*conditions|agree.*terms|^x34r4$/i, 'personal.consent_agreement'],
+  [/consent.*terms|terms\s*and\s*conditions|agree.*terms|^x34r4$/i, '_static.true'],
 ];
 
 // ─── Load profile ───────────────────────────────────────────────────────────
@@ -97,8 +106,26 @@ export async function loadProfile(profilePath) {
 }
 
 // ─── Get value from nested path ─────────────────────────────────────────────
-function getNestedValue(obj, path) {
+export function getNestedValue(obj, path) {
   return path.split('.').reduce((o, k) => o?.[k], obj);
+}
+
+// ─── Map label to profile value ─────────────────────────────────────────────
+export function mapLabelToProfileValue(label, profile) {
+  if (!label || !profile) return null;
+  const cleanLabel = label.replace(/\*+/g, '').trim();
+  for (const [regex, path] of FIELD_MAP) {
+    if (regex.test(cleanLabel)) {
+      if (path.startsWith('_static.')) {
+        return path.substring(8);
+      }
+      const val = getNestedValue(profile, path);
+      if (val !== undefined && val !== null && val !== '') {
+        return String(val);
+      }
+    }
+  }
+  return null;
 }
 
 // ─── Pick resume based on JD keywords ───────────────────────────────────────
@@ -166,8 +193,12 @@ export async function generatePlan(scan, profile, { resumePath, jdText, url } = 
       }
     }
 
-    // Skip hidden/search inputs
+    // Skip hidden/search inputs or internal token hashes
     if (/search|select__input/i.test(field.id) || /search|select__input/i.test(field.name)) continue;
+    if (!label && field.value && /^[a-f0-9]{16,}$/i.test(field.value)) {
+      skipped.push({ label: field.id || 'internal_token', reason: 'Internal session token' });
+      continue;
+    }
 
     // Resume file field — upload to any file input that accepts PDF (first one = resume)
     if (type === 'file') {
@@ -199,10 +230,11 @@ export async function generatePlan(scan, profile, { resumePath, jdText, url } = 
       continue;
     }
 
-    // Checkbox — data consent
+    // Checkbox — data consent / acknowledgment / Workday checkboxes
     if (type === 'checkbox') {
-      if (/agree|consent|acknowledge|terms|privacy/i.test(label) || /agree|consent/i.test(field.name)) {
-        fills.push({ ...field, value: true });
+      if (/agree|consent|acknowledge|terms|privacy|x34r4/i.test(label) || /agree|consent/i.test(field.name) || /x34r4/i.test(field.id)) {
+        const val = profile?.personal?.consent_agreement ?? true;
+        fills.push({ ...field, value: val });
       }
       continue;
     }

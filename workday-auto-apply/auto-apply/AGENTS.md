@@ -6,7 +6,9 @@
 - **Test before marking done** — self-run checkpoint from implementation plan; no silent assumptions  
 - **No paid tools beyond agy subscription** — flag any external API before adding
 - **Ask if ambiguous** — do not guess at Workday selectors, page flow, or code behavior; check source or ask
+- **Source of truth** — use CODEBASE-ANALYSIS.md as the source of truth in case anything is unclear
 - **Update STATE.md after every commit** — auto-update project state tracking (see rule below)
+- **Always update CODEBASE-ANALYSIS.md at every commit** — keep the analysis report in sync with actual code (see rule below)
 - **Git discipline** — one commit per vertical slice; branch name reflects slice; commit message clear
 
 ## Code Generation Tool
@@ -27,6 +29,19 @@
 3. Commit STATE.md update: `git add STATE.md && git commit -m "[State] Updated after [feature-branch] commit"`
 
 This keeps STATE.md canonical without manual tracking.
+
+## Codebase Analysis Auto-Update Rule
+
+**After every commit** that changes any file inside `lib/`, `cli.mjs`, or `config/`:
+1. Update `CODEBASE-ANALYSIS.md` to reflect what changed:
+   - If a module's behavior changed → update the relevant section (e.g., flow description, field map, supported ATS)
+   - If a new file was added or removed → update **Section 2 (Important Folders and Files)** and **Section 14 (Directory Structure)**
+   - If a new ATS was added → update **Section 11 (Supported ATS Platforms)**
+   - If a gap was closed → move it from **Section 13 (Limitations)** to the relevant capability section
+   - If a new limitation was introduced → add it to **Section 13**
+2. Commit the updated file: `git add CODEBASE-ANALYSIS.md && git commit -m "[Docs] Update CODEBASE-ANALYSIS after [feature-branch]"`
+
+This keeps `CODEBASE-ANALYSIS.md` accurate and usable as a live reference — not a one-time snapshot. Always use `CODEBASE-ANALYSIS.md` as the source of truth in case anything is unclear.
 
 ## Bot-Only Scope
 

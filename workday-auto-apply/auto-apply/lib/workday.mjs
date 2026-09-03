@@ -42,6 +42,10 @@ export async function isWorkdayLogin(page) {
     'button[data-automation-id="createAccountSubmitButton"]',
     'button[data-automation-id="signInSubmitButton"]',
     'button[data-automation-id="createAccountLink"]',
+    'a:has-text("Sign In")',
+    'button:has-text("Sign In")',
+    'button:has-text("Create Account")',
+    'a:has-text("Create Account")',
   ].join(', '));
 
   return !!hasLogin;
@@ -51,40 +55,57 @@ export async function isWorkdayLogin(page) {
 export async function workdayLogin(page, email, password) {
   console.log('   Logging into Workday...');
 
-  // Switch to Sign In tab if currently on Create Account tab
+  // 1. If on two-button page or Create Account tab, click "Sign In" link/button
   try {
-    const createAccountSubmit = await page.$('button[data-automation-id="createAccountSubmitButton"]');
-    if (createAccountSubmit && await createAccountSubmit.isVisible().catch(() => false)) {
-      const signInTab = await page.$('button[data-automation-id="signInLink"], button:has-text("Sign In"), a:has-text("Sign In")');
-      if (signInTab && await signInTab.isVisible().catch(() => false)) {
-        console.log('    Switching to Workday Sign In tab...');
-        await signInTab.click({ force: true }).catch(() => signInTab.evaluate(el => el.click()));
-        await page.waitForTimeout(1500);
+    const signInLinks = await page.$$('a:has-text("Sign In"), button:has-text("Sign In"), [data-automation-id="signInLink"], [data-automation-id="signInTab"]');
+    for (const link of signInLinks) {
+      if (await link.isVisible().catch(() => false)) {
+        const autoId = await link.getAttribute('data-automation-id').catch(() => '');
+        const type = await link.getAttribute('type').catch(() => '');
+        if (autoId !== 'signInSubmitButton' && type !== 'submit') {
+          console.log('    Clicking Workday "Sign In" link...');
+          await link.click({ force: true }).catch(() => link.evaluate(el => el.click()));
+          await page.waitForTimeout(1500);
+          break;
+        }
       }
     }
   } catch {}
 
-  // Fill visible email
-  const emailInputs = await page.$$('input[data-automation-id="email"], input[data-automation-id="userName"], input[type="email"]');
+  // 2. Wait for signin form to appear (email + password inputs)
+  try {
+    await page.waitForSelector('input[data-automation-id="password"], input[type="password"]', { timeout: 8000 });
+  } catch {}
+
+  // 3. Fill visible email
+  const emailInputs = await page.$$('input[data-automation-id="email"], input[data-automation-id="userName"], input[type="email"], input[name="email"], input[name="userName"]');
+  let emailFilled = false;
   for (const inp of emailInputs) {
     if (await inp.isVisible().catch(() => false)) {
       await inp.fill(email);
       await page.waitForTimeout(200);
+      emailFilled = true;
       break;
     }
   }
 
-  // Fill visible password
-  const passwordInputs = await page.$$('input[data-automation-id="password"], input[type="password"]');
+  // 4. Fill visible password
+  const passwordInputs = await page.$$('input[data-automation-id="password"], input[type="password"], input[name="password"]');
+  let passwordFilled = false;
   for (const inp of passwordInputs) {
     if (await inp.isVisible().catch(() => false)) {
       await inp.fill(password);
       await page.waitForTimeout(200);
+      passwordFilled = true;
       break;
     }
   }
 
-  // Click visible Sign In button with force: true
+  if (!emailFilled || !passwordFilled) {
+    console.log('    ⚠️  Could not locate visible email/password inputs on Sign In form.');
+  }
+
+  // 5. Click visible Sign In submit button with force: true
   const signInButtons = await page.$$('button[data-automation-id="signInSubmitButton"], button:has-text("Sign In"), button[type="submit"]');
   for (const btn of signInButtons) {
     if (await btn.isVisible().catch(() => false)) {
@@ -113,15 +134,26 @@ export async function workdayLogin(page, email, password) {
 export async function workdayCreateAccount(page, email, otpEmail, otpPassword, givenPassword) {
   console.log('   Creating Workday account...');
 
+  // 1. If on two-button page or Sign In tab, click "Create Account" button/link
   try {
-    const signInSubmit = await page.$('button[data-automation-id="signInSubmitButton"]');
-    if (signInSubmit && await signInSubmit.isVisible().catch(() => false)) {
-      const createTab = await page.$('button[data-automation-id="createAccountLink"], button:has-text("Create Account"), a:has-text("Create Account")');
-      if (createTab && await createTab.isVisible().catch(() => false)) {
-        await createTab.click({ force: true }).catch(() => createTab.evaluate(el => el.click()));
-        await page.waitForTimeout(1500);
+    const createBtns = await page.$$('button[data-automation-id="createAccountLink"], button:has-text("Create Account"), a:has-text("Create Account"), [data-automation-id="createAccountTab"]');
+    for (const btn of createBtns) {
+      if (await btn.isVisible().catch(() => false)) {
+        const autoId = await btn.getAttribute('data-automation-id').catch(() => '');
+        const type = await btn.getAttribute('type').catch(() => '');
+        if (autoId !== 'createAccountSubmitButton' && type !== 'submit') {
+          console.log('    Clicking Workday "Create Account" button...');
+          await btn.click({ force: true }).catch(() => btn.evaluate(el => el.click()));
+          await page.waitForTimeout(1500);
+          break;
+        }
       }
     }
+  } catch {}
+
+  // 2. Wait for create account form to appear
+  try {
+    await page.waitForSelector('input[data-automation-id="email"], input[type="email"], input[data-automation-id="verifyPassword"]', { timeout: 8000 });
   } catch {}
 
   const emailInputs = await page.$$('input[data-automation-id="email"], input[type="email"], input[name="email"]');
@@ -185,32 +217,119 @@ export async function workdayCreateAccount(page, email, otpEmail, otpPassword, g
   return password;
 }
 
+// ─── Detect if page currently shows Sign In inputs ──────────────────────────
+export async function isWorkdaySignInPage(page) {
+  const url = page.url();
+  if (!/workday|myworkday/i.test(url)) return false;
+
+  // 1. Check if application form wizard fields or buttons are visible
+  const hasAppFields = await page.$([
+    'button:has-text("Save and Continue")',
+    'button:has-text("Save & Continue")',
+    'button[data-automation-id="bottom-navigation-next-button"]',
+    'input[data-automation-id="legalNameSection_firstName"]',
+    'input[data-automation-id="phone-number"]',
+    '[data-automation-id*="wizardStep"]',
+  ].join(', ')).catch(() => null);
+
+  if (hasAppFields && await hasAppFields.isVisible().catch(() => false)) {
+    return false;
+  }
+
+  // 2. Check for visible sign-in inputs (email/password fields)
+  const pwdInput = await page.$('input[type="password"]:visible, input[data-automation-id="password"]:visible, input[name="password"]:visible').catch(() => null);
+  const emailInput = await page.$('input[data-automation-id="email"]:visible, input[data-automation-id="userName"]:visible, input[type="email"]:visible').catch(() => null);
+  const signInBtn = await page.$('button[data-automation-id="signInSubmitButton"]:visible, button:has-text("Sign In"):visible').catch(() => null);
+
+  return !!((pwdInput && emailInput) || pwdInput || signInBtn);
+}
+
 // ─── Full Workday flow ──────────────────────────────────────────────────────
-export async function handleWorkday(page, { email, password, otpEmail, otpPassword } = {}) {
+export async function handleWorkday(page, { email, password, otpEmail, otpPassword, mode = 'signin' } = {}) {
+  // Check if already on application form wizard before doing any discovery
+  const isAlreadyOnWizard = await page.$([
+    'button:has-text("Save and Continue")',
+    'button:has-text("Save & Continue")',
+    'button[data-automation-id="bottom-navigation-next-button"]',
+    'input[data-automation-id="legalNameSection_firstName"]',
+    'input[data-automation-id="phone-number"]',
+    '[data-automation-id*="wizardStep"]',
+  ].join(', ')).catch(() => null);
+
+  if (isAlreadyOnWizard && await isAlreadyOnWizard.isVisible().catch(() => false)) {
+    console.log('   Already on Workday application form wizard — skipping discovery.');
+    return true;
+  }
+
   if (!await isWorkdayLogin(page)) {
-    await discoverApplicationForm(page, page.url());
+    await discoverApplicationForm(page, page.url(), { mode });
   }
 
-  if (!await isWorkdayLogin(page)) return true;
-
-  if (email && password) {
-    const loggedIn = await workdayLogin(page, email, password);
-    if (loggedIn) return true;
+  // If already past login and on form/wizard, authentication is already confirmed
+  if (!await isWorkdayLogin(page)) {
+    console.log('   Already authenticated on Workday application form.');
+    return true;
   }
 
-  if (email) {
-    const newPassword = await workdayCreateAccount(page, email, otpEmail, otpPassword, password);
-    if (newPassword) {
-      await page.waitForTimeout(3000);
-      try { await page.waitForLoadState('networkidle', { timeout: 20000 }); } catch {}
+  console.log(`   Workday auth mode: "${mode}"`);
 
-      if (await isWorkdayLogin(page)) {
-        await workdayLogin(page, email, newPassword);
+  // Mode: "signin" -> call workdayLogin() only (skip workdayCreateAccount)
+  if (mode === 'signin') {
+    if (email && password) {
+      console.log(`   Logging in to Workday as ${email}...`);
+      const loggedIn = await workdayLogin(page, email, password);
+      if (loggedIn) {
+        await page.waitForTimeout(3000);
+        try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
+        return true;
       }
-      return true;
+      console.log('   ❌ Sign-in failed with provided credentials in signin mode.');
+      return false;
     }
+    console.log('   ❌ Missing email or password for Workday signin mode.');
+    return false;
   }
 
-  console.log('   Cannot proceed with Workday — no credentials.');
+  // Mode: "signup" -> call workdayCreateAccount() then workdayLogin()
+  if (mode === 'signup') {
+    if (email) {
+      console.log(`   Creating new Workday account for ${email}...`);
+      const newPassword = await workdayCreateAccount(page, email, otpEmail, otpPassword, password);
+      if (newPassword) {
+        console.log('   Checking page state after account creation...');
+        await page.waitForTimeout(3000);
+        try { await page.waitForLoadState('networkidle', { timeout: 20000 }); } catch {}
+        await page.waitForTimeout(2000);
+
+        // Page detection step:
+        // 1. Check if current page has sign-in form inputs (email, password visible)
+        const onSignIn = await isWorkdaySignInPage(page);
+
+        if (onSignIn) {
+          // 2. If yes: call workdayLogin with the new email and password, wait for sign-in to complete
+          console.log('   Workday redirected to Sign In page — logging in with new credentials...');
+          const loggedIn = await workdayLogin(page, email, newPassword);
+          if (!loggedIn) {
+            console.log('   ❌ Sign-in failed after account creation.');
+            return false;
+          }
+          await page.waitForTimeout(3000);
+          try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
+          console.log('   ✅ Sign-in confirmed after account creation.');
+          return true;
+        } else {
+          // 3. If no: page is already on application form, proceed directly to fillForm
+          console.log('   ✅ Page already on application form after account creation — proceeding directly to form.');
+          return true;
+        }
+      }
+      console.log('   ❌ Account creation failed in signup mode.');
+      return false;
+    }
+    console.log('   ❌ Missing email for Workday signup mode.');
+    return false;
+  }
+
+  console.log(`   ❌ Unknown mode "${mode}" or missing credentials.`);
   return false;
 }

@@ -46,47 +46,53 @@ export function slugify(url) {
 }
 
 // ─── Scan a form ────────────────────────────────────────────────────────────
-export async function scanForm(url, { formsDir, browser: existingBrowser, workdayEmail, workdayPassword, otpEmail, otpPassword } = {}) {
+export async function scanForm(url, { formsDir, browser: existingBrowser, context: existingContext, page: existingPage, keepOpen = false, workdayEmail, workdayPassword, otpEmail, otpPassword, mode = 'signin' } = {}) {
   console.log(`🔍 Scanning: ${url}`);
   const outDir = formsDir || resolve(process.cwd(), 'forms');
   await mkdir(outDir, { recursive: true });
 
   const ownBrowser = !existingBrowser;
   const browser = existingBrowser || await chromium.launch({ headless: false });
-  const context = await browser.newContext({
+  const context = existingContext || (existingBrowser ? await browser.newContext() : await browser.newContext({
     viewport: { width: 1280, height: 900 },
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  });
-  const page = await context.newPage();
+  }));
+  const page = existingPage || await context.newPage();
 
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    // Wait extra for JS-heavy pages (Workday, custom portals)
-    try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch { /* partial load OK */ }
-    await page.waitForTimeout(2000);
+    const currentUrl = page.url();
+    if (!currentUrl || currentUrl === 'about:blank' || currentUrl.startsWith('data:')) {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // Wait extra for JS-heavy pages (Workday, custom portals)
+      try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch { /* partial load OK */ }
+      await page.waitForTimeout(2000);
+    }
 
     const ats = detectATS(url);
     let formUrl = url;
-    const foundForm = await discoverApplicationForm(page, url);
+
+    // Step 1: Discover application form (clicks Apply -> Apply Manually on Workday)
+    console.log(`   Discovering application form for ${ats}...`);
+    const foundForm = await discoverApplicationForm(page, url, { mode });
     if (foundForm) formUrl = foundForm;
 
+    // Step 2: Authenticate if Workday
     if (ats === 'workday') {
-      const isLogin = await isWorkdayLogin(page);
-      if (isLogin) {
-        console.log('   Authenticating on Workday before scanning form fields...');
-        await handleWorkday(page, {
-          email: workdayEmail || otpEmail,
-          password: workdayPassword,
-          otpEmail,
-          otpPassword,
-        });
-      }
+      console.log(`   Authenticating on Workday (${mode} mode) before scanning form fields...`);
+      await handleWorkday(page, {
+        email: workdayEmail || otpEmail,
+        password: workdayPassword,
+        otpEmail,
+        otpPassword,
+        mode,
+      });
 
       try { await page.waitForLoadState('networkidle', { timeout: 15000 }); } catch {}
       await page.waitForTimeout(3000);
       try {
         await page.waitForSelector('input:not([type="hidden"]), select, textarea, [data-automation-id*="form"], [data-automation-id*="page"], [data-automation-id*="Section"]', { timeout: 10000 });
       } catch {}
+      formUrl = page.url();
     }
 
     const pageTitle = await page.title();
@@ -261,14 +267,18 @@ export async function scanForm(url, { formsDir, browser: existingBrowser, workda
       console.log(`  ${i + 1}. [${f.type}] ${f.label || f.id}${req}`);
     });
 
-    await context.close();
-    if (ownBrowser) await browser.close();
+    if (!keepOpen) {
+      await context.close();
+      if (ownBrowser) await browser.close();
+    }
     return scan;
 
   } catch (err) {
     console.error(`❌ Scan failed: ${err.message}`);
-    await context.close();
-    if (ownBrowser) await browser.close();
+    if (!keepOpen) {
+      await context.close();
+      if (ownBrowser) await browser.close();
+    }
     throw err;
   }
 }
