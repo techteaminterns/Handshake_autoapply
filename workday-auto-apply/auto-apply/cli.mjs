@@ -36,30 +36,104 @@ let otpEmail = process.env.EMAIL || '';
 let otpPassword = process.env.APP_PASSWORD || '';
 let workdayEmail = process.env.WORKDAY_EMAIL || '';
 let workdayPassword = process.env.WORKDAY_PASSWORD || '';
+let isSignup = false;
 const positionalArgs = [];
 
 for (let i = 0; i < rawArgs.length; i++) {
   if (rawArgs[i] === '--otp-email' && rawArgs[i + 1]) otpEmail = rawArgs[++i];
   else if (rawArgs[i] === '--otp-password' && rawArgs[i + 1]) otpPassword = rawArgs[++i];
+  else if (rawArgs[i] === '--workday-email' && rawArgs[i + 1]) workdayEmail = rawArgs[++i];
+  else if (rawArgs[i] === '--workday-password' && rawArgs[i + 1]) workdayPassword = rawArgs[++i];
+  else if (rawArgs[i] === '--signup') isSignup = true;
+  else if (rawArgs[i] === '--signin') isSignup = false;
   else positionalArgs.push(rawArgs[i]);
+}
+const mode = isSignup ? 'signup' : 'signin';
+
+// ─── Find file across candidate paths (cwd, auto-apply, __dirname) ──────────
+function findFilePath(relPath) {
+  const candidates = [
+    resolve(process.cwd(), relPath),
+    resolve(__dirname, relPath),
+    resolve(process.cwd(), 'auto-apply', relPath),
+    resolve(__dirname, '..', relPath),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return candidates[0];
 }
 
 // ─── Load .env if present ───────────────────────────────────────────────────
 async function loadEnv() {
-  const envPath = resolve(process.cwd(), '.env');
-  if (existsSync(envPath)) {
-    const content = await readFile(envPath, 'utf-8');
-    for (const line of content.split('\n')) {
-      const match = line.match(/^(\w+)=(.+)$/);
-      if (match) {
-        const [, key, val] = match;
-        if (key === 'EMAIL' && !otpEmail) otpEmail = val.trim();
-        if (key === 'APP_PASSWORD' && !otpPassword) otpPassword = val.trim();
-        if (key === 'WORKDAY_EMAIL' && !workdayEmail) workdayEmail = val.trim();
-        if (key === 'WORKDAY_PASSWORD' && !workdayPassword) workdayPassword = val.trim();
+  const envCandidates = [
+    resolve(process.cwd(), '.env'),
+    resolve(__dirname, '.env'),
+    resolve(process.cwd(), 'auto-apply', '.env'),
+    resolve(__dirname, '..', '.env'),
+  ];
+
+  for (const envPath of envCandidates) {
+    if (existsSync(envPath)) {
+      const content = await readFile(envPath, 'utf-8');
+      for (const line of content.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const match = trimmed.match(/^([A-Za-z0-9_]+)\s*=\s*(.*)$/);
+        if (match) {
+          const [, key, rawVal] = match;
+          const val = rawVal.trim().replace(/^['"](.*)['"]$/, '$1');
+          if (val) {
+            process.env[key] = val;
+            if (key === 'EMAIL' && !otpEmail) otpEmail = val;
+            if (key === 'APP_PASSWORD' && !otpPassword) otpPassword = val;
+            if (key === 'WORKDAY_EMAIL' && !workdayEmail) workdayEmail = val;
+            if (key === 'WORKDAY_PASSWORD' && !workdayPassword) workdayPassword = val;
+          }
+        }
       }
+      break;
     }
   }
+}
+
+// ─── Resolve credentials from CLI flags, .env, and config/profile.yml ───────
+async function resolveAuthCredentials() {
+  await loadEnv();
+
+  let profile = null;
+  const profilePath = findFilePath('config/profile.yml');
+  if (existsSync(profilePath)) {
+    try {
+      profile = await loadProfile(profilePath);
+    } catch { /* ignore parsing errors */ }
+  }
+
+  let resolvedWorkdayEmail = workdayEmail || process.env.WORKDAY_EMAIL || '';
+  let resolvedWorkdayPassword = workdayPassword || process.env.WORKDAY_PASSWORD || '';
+  const resolvedOtpEmail = otpEmail || process.env.EMAIL || profile?.personal?.email || '';
+  const resolvedOtpPassword = otpPassword || process.env.APP_PASSWORD || '';
+
+  if (mode === 'signin') {
+    // For signin mode, read credentials from environment variables instead of profile.yml
+    if (!resolvedWorkdayEmail || !resolvedWorkdayPassword) {
+      console.error('\n❌ Error: Set WORKDAY_EMAIL and WORKDAY_PASSWORD in .env file\n');
+      process.exit(1);
+    }
+  } else if (mode === 'signup') {
+    // For signup mode, fallback to profile email if not provided in env
+    resolvedWorkdayEmail = resolvedWorkdayEmail || profile?.workday?.email || profile?.personal?.email || resolvedOtpEmail;
+    resolvedWorkdayPassword = resolvedWorkdayPassword || profile?.workday?.password || '';
+  }
+
+  return {
+    profile,
+    workdayEmail: resolvedWorkdayEmail,
+    workdayPassword: resolvedWorkdayPassword,
+    otpEmail: resolvedOtpEmail,
+    otpPassword: resolvedOtpPassword,
+    mode,
+  };
 }
 
 // ─── SETUP ──────────────────────────────────────────────────────────────────
@@ -185,7 +259,14 @@ async function cmdScan(url) {
     console.log('Usage: node cli.mjs scan <url>');
     process.exit(1);
   }
-  await scanForm(url);
+  const creds = await resolveAuthCredentials();
+  await scanForm(url, {
+    workdayEmail: creds.workdayEmail,
+    workdayPassword: creds.workdayPassword,
+    otpEmail: creds.otpEmail,
+    otpPassword: creds.otpPassword,
+    mode: creds.mode,
+  });
 }
 
 // ─── FILL ───────────────────────────────────────────────────────────────────
@@ -195,6 +276,7 @@ async function cmdFill(url, planPath) {
     process.exit(1);
   }
 
+  const creds = await resolveAuthCredentials();
   let plan;
   if (planPath) {
     // Use provided plan
@@ -204,8 +286,14 @@ async function cmdFill(url, planPath) {
   } else {
     // Auto-generate plan
     console.log('📋 Auto-generating fill plan from profile...');
-    const profile = await loadProfile();
-    const scan = await scanForm(url);
+    const profile = creds.profile || await loadProfile();
+    const scan = await scanForm(url, {
+      workdayEmail: creds.workdayEmail,
+      workdayPassword: creds.workdayPassword,
+      otpEmail: creds.otpEmail,
+      otpPassword: creds.otpPassword,
+      mode: creds.mode,
+    });
     const resumePath = await pickResume('', resolve(process.cwd(), 'config', 'resumes.yml')).catch(() => null);
     plan = await generatePlan(scan, profile, { resumePath, url });
 
@@ -224,80 +312,121 @@ async function cmdFill(url, planPath) {
   // Apply learnings from past runs
   plan = await applyLearnings(plan, url);
 
-  await fillForm(url, plan, { otpEmail, otpPassword, workdayEmail, workdayPassword });
+  try {
+    await fillForm(url, plan, {
+      otpEmail: creds.otpEmail,
+      otpPassword: creds.otpPassword,
+      workdayEmail: creds.workdayEmail,
+      workdayPassword: creds.workdayPassword,
+      mode: creds.mode,
+    });
+  } catch (err) {
+    const timestamp = new Date().toISOString();
+    console.error(`\n❌ [${timestamp}] Form fill error: ${err.message}`);
+    console.log('   Stopping pipeline. Exiting cleanly without reopening job link.\n');
+  }
 }
 
 // ─── APPLY (full pipeline) ──────────────────────────────────────────────────
 async function cmdApply(url) {
   if (!url) {
-    console.log('Usage: node cli.mjs apply <url>');
+    console.log('Usage: node cli.mjs apply <url> [--signup|--signin]');
     process.exit(1);
   }
 
-  const profilePath = resolve(process.cwd(), 'config', 'profile.yml');
+  const profilePath = findFilePath('config/profile.yml');
   if (!existsSync(profilePath)) {
     console.log('❌ No config/profile.yml found. Run: node cli.mjs setup');
     process.exit(1);
   }
 
+  const creds = await resolveAuthCredentials();
+  const profile = creds.profile || await loadProfile(profilePath);
+
   console.log(`\n${'═'.repeat(60)}`);
-  console.log(`🚀 AUTO-APPLY: ${url}`);
+  console.log(`🚀 AUTO-APPLY: ${url} (Mode: ${creds.mode})`);
   console.log(`${'═'.repeat(60)}\n`);
 
   const ats = detectATS(url);
   console.log(`🔍 ATS detected: ${ats}`);
 
-  // Step 1: Scan
-  console.log('\n── Step 1: Scan form ──');
-  const scan = await scanForm(url);
+  // Launch single browser session for the entire pipeline
+  const browser = await chromium.launch({ headless: false });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  });
+  const page = await context.newPage();
 
-  // Step 2: Load profile & pick resume
-  console.log('\n── Step 2: Load profile & pick resume ──');
-  const profile = await loadProfile();
-
-  // Extract JD text for resume matching
-  let jdText = '';
   try {
-    const browser = await chromium.launch({ headless: false });
-    const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.waitForTimeout(2000);
-    jdText = await extractJDText(page);
-    await browser.close();
-  } catch { /* couldn't extract JD */ }
+    // Step 1: Scan (with auth if Workday)
+    console.log('\n── Step 1: Scan form ──');
+    const scan = await scanForm(url, {
+      browser,
+      context,
+      page,
+      keepOpen: true,
+      workdayEmail: creds.workdayEmail,
+      workdayPassword: creds.workdayPassword,
+      otpEmail: creds.otpEmail,
+      otpPassword: creds.otpPassword,
+      mode: creds.mode,
+    });
 
-  const resumesYml = resolve(process.cwd(), 'config', 'resumes.yml');
-  let resumePath = null;
-  if (existsSync(resumesYml)) {
-    resumePath = await pickResume(jdText, resumesYml);
+    // Step 2: Pick resume
+    console.log('\n── Step 2: Load profile & pick resume ──');
+    let jdText = '';
+    try {
+      jdText = await extractJDText(page);
+    } catch { /* couldn't extract JD */ }
+
+    const resumesYml = findFilePath('config/resumes.yml');
+    let resumePath = null;
+    if (existsSync(resumesYml)) {
+      resumePath = await pickResume(jdText, resumesYml);
+    }
+
+    // Step 3: Generate plan
+    console.log('\n── Step 3: Generate fill plan ──');
+    let plan = await generatePlan(scan, profile, { resumePath, jdText, url });
+
+    // Save plan
+    const slug = slugify(url);
+    const planPath = resolve(process.cwd(), 'forms', `${slug}-plan.json`);
+    await writeFile(planPath, JSON.stringify(plan, null, 2));
+    console.log(`📄 Plan: ${planPath}`);
+    console.log(`📋 ${plan.fills.length} fills, ${plan.skipped.length} skipped, ${plan.unmapped?.length || 0} unmapped`);
+
+    if (plan.unmapped?.length > 0) {
+      console.log(`\n⚠️  Unmapped fields (will be skipped):`);
+      plan.unmapped.forEach(f => console.log(`    - ${f.label} [${f.type}]`));
+    }
+
+    // Step 4: Apply learnings
+    plan = await applyLearnings(plan, url);
+
+    // Step 5: Fill + Submit
+    console.log('\n── Step 4: Fill & Submit ──');
+    const status = await fillForm(url, plan, {
+      browser,
+      context,
+      page,
+      otpEmail: creds.otpEmail,
+      otpPassword: creds.otpPassword,
+      workdayEmail: creds.workdayEmail,
+      workdayPassword: creds.workdayPassword,
+      mode: creds.mode,
+    });
+
+    console.log(`\n${'═'.repeat(60)}`);
+    console.log(`✅ Pipeline complete: ${status}`);
+    console.log(`${'═'.repeat(60)}\n`);
+  } catch (err) {
+    const timestamp = new Date().toISOString();
+    console.error(`\n❌ [${timestamp}] Form fill error for ${url}: ${err.message}`);
+    console.log('   Stopping pipeline. Exiting cleanly without reopening job link.\n');
+    try { await browser.close(); } catch {}
   }
-
-  // Step 3: Generate plan
-  console.log('\n── Step 3: Generate fill plan ──');
-  let plan = await generatePlan(scan, profile, { resumePath, jdText, url });
-
-  // Save plan
-  const slug = slugify(url);
-  const planPath = resolve(process.cwd(), 'forms', `${slug}-plan.json`);
-  await writeFile(planPath, JSON.stringify(plan, null, 2));
-  console.log(`📄 Plan: ${planPath}`);
-  console.log(`📋 ${plan.fills.length} fills, ${plan.skipped.length} skipped, ${plan.unmapped?.length || 0} unmapped`);
-
-  if (plan.unmapped?.length > 0) {
-    console.log(`\n⚠️  Unmapped fields (will be skipped):`);
-    plan.unmapped.forEach(f => console.log(`    - ${f.label} [${f.type}]`));
-  }
-
-  // Step 4: Apply learnings
-  plan = await applyLearnings(plan, url);
-
-  // Step 5: Fill + Submit
-  console.log('\n── Step 4: Fill & Submit ──');
-  const status = await fillForm(url, plan, { otpEmail, otpPassword, workdayEmail, workdayPassword });
-
-  console.log(`\n${'═'.repeat(60)}`);
-  console.log(`✅ Pipeline complete: ${status}`);
-  console.log(`${'═'.repeat(60)}\n`);
 }
 
 // ─── QUEUE ──────────────────────────────────────────────────────────────────
@@ -601,8 +730,10 @@ Usage:
   node cli.mjs status                      Show stats & learnings
 
 Options:
-  --otp-email <gmail>       Gmail for OTP (or set EMAIL in .env)
-  --otp-password <app-pw>   Gmail App Password (or set APP_PASSWORD in .env)
+  --otp-email <gmail>           Gmail for OTP (or set EMAIL in .env)
+  --otp-password <app-pw>       Gmail App Password (or set APP_PASSWORD in .env)
+  --workday-email <email>       Workday account email (or set WORKDAY_EMAIL in .env)
+  --workday-password <password> Workday account password (or set WORKDAY_PASSWORD in .env)
 
 Supported ATS: Greenhouse, Ashby, Lever, Workday, Gem, iCIMS, SmartRecruiters, generic
 
